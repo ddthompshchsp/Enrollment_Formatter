@@ -21,6 +21,8 @@ if uploaded_file:
     wb = load_workbook(uploaded_file)
     ws = wb.active
 
+ws.freeze_panes = "B4"
+
     header_row = None
     for row in ws.iter_rows(min_row=1, max_row=20):
         for cell in row:
