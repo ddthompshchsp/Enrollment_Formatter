@@ -20,8 +20,8 @@ if uploaded_file:
     # Step 1: Load the workbook to find the header row
     wb = load_workbook(uploaded_file)
     ws = wb.active
+    ws.freeze_panes = "B4"
 
-ws.freeze_panes = "B4"
 
     header_row = None
     for row in ws.iter_rows(min_row=1, max_row=20):
