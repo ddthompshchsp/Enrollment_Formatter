@@ -11,7 +11,7 @@ st.image(logo, width=300)
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
-st.title("📋 Enrollment Checklist Formatter (2025–2026)")
+st.title("HCHSP Enrollment Checklist Formatter (2025–2026)")
 st.markdown("Upload your **Enrollment.xlsx** file to receive a formatted version.")
 
 uploaded_file = st.file_uploader("Upload Enrollment.xlsx", type=["xlsx"])
