@@ -1,80 +1,76 @@
-
 import streamlit as st
 import pandas as pd
-from io import BytesIO
-from openpyxl.utils import get_column_letter
-from openpyxl.styles import Font, PatternFill
 from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
-st.title("📝 Enrollment Checklist Formatter 2025–2026")
-st.write("Upload your `Enrollment.xlsx` file below to generate a properly formatted checklist.")
+st.title("📋 Enrollment Checklist Formatter (2025–2026)")
+st.markdown("Upload your **Enrollment.xlsx** file to receive a formatted version.")
 
-uploaded_file = st.file_uploader("Upload Enrollment.xlsx", type="xlsx")
+uploaded_file = st.file_uploader("Upload Enrollment.xlsx", type=["xlsx"])
 
 if uploaded_file:
-    try:
-        df_raw = pd.read_excel(uploaded_file, header=None)
+    # Step 1: Load the workbook to find the header row
+    wb = load_workbook(uploaded_file)
+    ws = wb.active
 
-        # Extract column names from row 4 (index 3)
-        column_headers = df_raw.iloc[3].fillna('').astype(str).str.replace("ST: ", "").str.strip()
-        df_data = df_raw.iloc[4:].copy()
-        df_data.columns = column_headers
+    header_row = None
+    for row in ws.iter_rows(min_row=1, max_row=20):
+        for cell in row:
+            if isinstance(cell.value, str) and "ST: Participant PID" in cell.value:
+                header_row = cell.row
+                break
+        if header_row:
+            break
 
-        # Remove rows without PID
-        df_data = df_data[df_data["Participant PID"].notna()]
+    if not header_row:
+        st.error("Couldn't find 'ST: Participant PID' in the file. Please upload the correct file.")
+    else:
+        # Step 2: Load into pandas from header_row
+        df = pd.read_excel(uploaded_file, header=header_row - 1)
+        df.columns = [col.replace("ST: ", "") if isinstance(col, str) else col for col in df.columns]
 
-        # Trim columns after "Lead Risk Questionnaire: Entered By"
-        end_col = "Lead Risk Questionnaire: Entered By"
-        if end_col in df_data.columns:
-            df_data = df_data.loc[:, :end_col]
+        # Remove duplicates by PID
+        df = df.dropna(subset=["Participant PID"]).drop_duplicates(subset=["Participant PID"])
 
-        # Consolidate by PID
-        df_unique = df_data.groupby("Participant PID", as_index=False).agg(lambda x: x.dropna().iloc[0] if not x.dropna().empty else "")
+        # Extract center name for title
+        center_name = df["Center Name"].iloc[0] if "Center Name" in df.columns else "Center"
+        title = f"Enrollment Checklist 2025–2026 – {center_name}"
 
-        # Write to Excel with formatting
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df_unique.to_excel(writer, index=False, startrow=1, sheet_name="Checklist")
-            wb = writer.book
-            ws = writer.sheets["Checklist"]
+        # Save interim file
+        temp_path = "Enrollment_Cleaned.xlsx"
+        with pd.ExcelWriter(temp_path, engine="openpyxl") as writer:
+            pd.DataFrame([[title]]).to_excel(writer, index=False, header=False, startrow=0)
+            df.to_excel(writer, index=False, startrow=2)
 
-            # Insert title in row 1
-            center_name = df_data["Center Name"].dropna().iloc[0] if "Center Name" in df_data.columns else ""
-            title = f"Enrollment Checklist 2025–2026 – {center_name}"
-            ws["A1"] = title
-            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
-            ws["A1"].font = Font(bold=True)
+        # Step 3: Load for formatting
+        wb = load_workbook(temp_path)
+        ws = wb.active
 
-            # Bold headers in row 2
-            for cell in ws[2]:
-                cell.font = Font(bold=True)
+        # Formatting
+        filter_row = 3
+        ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(ws.max_column)}{ws.max_row}"
 
-            # Highlight columns M-O (columns 13–15)
-            yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-            for col in range(13, 16):
-                ws.cell(row=2, column=col).fill = yellow_fill
+        for cell in ws[filter_row]:
+            cell.font = Font(bold=True)
 
-            # Add red "X" to missing values from row 3 onward
-            red_font = Font(color="FF0000")
-            for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
-                for cell in row:
-                    if cell.value in [None, "", "nan"]:
-                        cell.value = "X"
-                        cell.font = red_font
+        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+        for col in range(13, 16):  # M to O
+            ws.cell(row=filter_row, column=col).fill = yellow_fill
 
-            # Set filter starting from row 2
-            max_col_letter = get_column_letter(ws.max_column)
-            ws.auto_filter.ref = f"A2:{max_col_letter}{ws.max_row}"
+        red_font = Font(color="FF0000", bold=True)
+        for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row):
+            for cell in row:
+                if cell.value in [None, "", "nan"]:
+                    cell.value = "X"
+                    cell.font = red_font
 
-        st.success("✅ File formatted successfully! Download below.")
-        st.download_button(
-            label="📥 Download Formatted Checklist",
-            data=output.getvalue(),
-            file_name="EnrollmentChecklist_Formatted.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        # Final output
+        final_output = "Formatted_Enrollment_Checklist.xlsx"
+        wb.save(final_output)
 
-    except Exception as e:
-        st.error(f"Something went wrong: {e}")
+        with open(final_output, "rb") as f:
+            st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
