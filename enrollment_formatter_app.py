@@ -3,6 +3,11 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
+from PIL import Image
+
+logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
+st.image(logo, width=300)
+
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
