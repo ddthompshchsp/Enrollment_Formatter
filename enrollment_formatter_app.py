@@ -4,10 +4,10 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image
+from datetime import datetime  # 👈 added for date comparison
 
 logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
 st.image(logo, width=300)
-
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
@@ -21,7 +21,6 @@ if uploaded_file:
     wb = load_workbook(uploaded_file)
     ws = wb.active
     ws.freeze_panes = "B4"
-
 
     header_row = None
     for row in ws.iter_rows(min_row=1, max_row=20):
@@ -68,11 +67,18 @@ if uploaded_file:
             ws.cell(row=filter_row, column=col).fill = yellow_fill
 
         red_font = Font(color="FF0000", bold=True)
+        cutoff_date = datetime(2025, 5, 15)  # 👈 any date before this turns red
+
+        # Missing values -> "X" in red, and any real date < cutoff -> red font
         for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row):
             for cell in row:
                 if cell.value in [None, "", "nan"]:
                     cell.value = "X"
                     cell.font = red_font
+                else:
+                    # If it's a datetime object and earlier than cutoff, make it red
+                    if isinstance(cell.value, datetime) and cell.value < cutoff_date:
+                        cell.font = red_font
 
         # Final output
         final_output = "Formatted_Enrollment_Checklist.xlsx"
@@ -80,4 +86,5 @@ if uploaded_file:
 
         with open(final_output, "rb") as f:
             st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
 
