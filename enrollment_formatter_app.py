@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from PIL import Image
 from datetime import datetime, date  # for date comparison
@@ -20,7 +20,7 @@ if uploaded_file:
     # Step 1: Load the workbook to find the header row
     wb = load_workbook(uploaded_file)
     ws = wb.active
-    ws.freeze_panes = "B4"
+    ws.freeze_panes = "B4"  # keep PID (col A) and header visible
 
     header_row = None
     for row in ws.iter_rows(min_row=1, max_row=20):
@@ -41,8 +41,21 @@ if uploaded_file:
         # Remove duplicates by PID
         df = df.dropna(subset=["Participant PID"]).drop_duplicates(subset=["Participant PID"])
 
-       
-        title = f"Enrollment Checklist 2025–2026"
+        # ---- Rename by position (L, M, R, S) ----
+        # A=1 -> index 0, so: L=12->11, M=13->12, R=18->17, S=19->18
+        col_names = list(df.columns)
+        if len(col_names) >= 12:
+            col_names[11] = "Immunization"
+        if len(col_names) >= 13:
+            col_names[12] = "Returning Child Yes/Si"
+        if len(col_names) >= 18:
+            col_names[17] = "Food Allergies Yes/No"
+        if len(col_names) >= 19:
+            col_names[18] = "Nutrition Assessment Date"
+        df.columns = col_names
+
+        # Title (no school name)
+        title = "Enrollment Checklist 2025–2026"
 
         # Save interim file
         temp_path = "Enrollment_Cleaned.xlsx"
@@ -55,15 +68,18 @@ if uploaded_file:
         ws = wb.active
 
         # Formatting
-        filter_row = 3
+        filter_row = 3  # header row in the output file
         ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(ws.max_column)}{ws.max_row}"
 
+        # Bold + wrap headers on row 3
         for cell in ws[filter_row]:
             cell.font = Font(bold=True)
+            cell.alignment = Alignment(wrapText=True)
 
+        # Highlight ONLY column M (13) on header row
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        for col in range(13, 16):  # M to O
-            ws.cell(row=filter_row, column=col).fill = yellow_fill
+        if ws.max_column >= 13:
+            ws.cell(row=filter_row, column=13).fill = yellow_fill  # column M
 
         red_font = Font(color="FF0000", bold=True)
         cutoff_date = datetime(2025, 5, 15)
@@ -95,12 +111,10 @@ if uploaded_file:
                     cell.font = red_font
                 else:
                     make_red = False
-                    # Excel-stored date?
                     if getattr(cell, "is_date", False) and isinstance(val, (datetime, date)):
                         dt = val if isinstance(val, datetime) else datetime(val.year, val.month, val.day)
                         make_red = dt < cutoff_date
                     else:
-                        # Try to parse strings like "05/01/2025"
                         dt = _to_datetime(val)
                         make_red = dt is not None and dt < cutoff_date
 
