@@ -4,7 +4,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image
-from datetime import datetime  # 👈 added for date comparison
+from datetime import datetime, date  # for date comparison
 
 logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
 st.image(logo, width=300)
@@ -67,17 +67,45 @@ if uploaded_file:
             ws.cell(row=filter_row, column=col).fill = yellow_fill
 
         red_font = Font(color="FF0000", bold=True)
-        cutoff_date = datetime(2025, 5, 15)  # 👈 any date before this turns red
+        cutoff_date = datetime(2025, 5, 15)
 
-        # Missing values -> "X" in red, and any real date < cutoff -> red font
-        for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row):
+        # --- helper to parse date-like values without changing your flow ---
+        def _to_datetime(v):
+            if isinstance(v, datetime):
+                return v
+            if isinstance(v, date):
+                return datetime(v.year, v.month, v.day)
+            if isinstance(v, (int, float)):
+                # leave numeric alone unless Excel marks it as a date (handled via cell.is_date)
+                return None
+            if isinstance(v, str):
+                s = v.strip()
+                for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
+                    try:
+                        return datetime.strptime(s, fmt)
+                    except Exception:
+                        pass
+            return None
+
+        # Missing values -> "X" in red, and any date (true Excel date OR parsed string) < cutoff -> red font
+        for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
             for cell in row:
-                if cell.value in [None, "", "nan"]:
+                val = cell.value
+                if val in [None, "", "nan"]:
                     cell.value = "X"
                     cell.font = red_font
                 else:
-                    # If it's a datetime object and earlier than cutoff, make it red
-                    if isinstance(cell.value, datetime) and cell.value < cutoff_date:
+                    make_red = False
+                    # Excel-stored date?
+                    if getattr(cell, "is_date", False) and isinstance(val, (datetime, date)):
+                        dt = val if isinstance(val, datetime) else datetime(val.year, val.month, val.day)
+                        make_red = dt < cutoff_date
+                    else:
+                        # Try to parse strings like "05/01/2025"
+                        dt = _to_datetime(val)
+                        make_red = dt is not None and dt < cutoff_date
+
+                    if make_red:
                         cell.font = red_font
 
         # Final output
