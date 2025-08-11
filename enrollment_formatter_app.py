@@ -41,9 +41,8 @@ if uploaded_file:
         # Remove duplicates by PID
         df = df.dropna(subset=["Participant PID"]).drop_duplicates(subset=["Participant PID"])
 
-        # Extract center name for title
-        center_name = df["Center Name"].iloc[0] if "Center Name" in df.columns else "Center"
-        title = f"Enrollment Checklist 2025–2026 – {center_name}"
+       
+        title = f"Enrollment Checklist 2025–2026"
 
         # Save interim file
         temp_path = "Enrollment_Cleaned.xlsx"
