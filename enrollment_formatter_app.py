@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image
-from datetime import datetime, date  # for date comparison
+from datetime import datetime
 
 logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
 st.image(logo, width=300)
@@ -20,7 +20,7 @@ if uploaded_file:
     # Step 1: Load the workbook to find the header row
     wb = load_workbook(uploaded_file)
     ws = wb.active
-    ws.freeze_panes = "B4"  # keep PID (col A) and header visible
+    ws.freeze_panes = "B4"
 
     header_row = None
     for row in ws.iter_rows(min_row=1, max_row=20):
@@ -41,20 +41,7 @@ if uploaded_file:
         # Remove duplicates by PID
         df = df.dropna(subset=["Participant PID"]).drop_duplicates(subset=["Participant PID"])
 
-        # ---- Rename by position (L, M, R, S) ----
-        # A=1 -> index 0, so: L=12->11, M=13->12, R=18->17, S=19->18
-        col_names = list(df.columns)
-        if len(col_names) >= 12:
-            col_names[11] = "Immunization"
-        if len(col_names) >= 13:
-            col_names[12] = "Returning Child Yes/Si"
-        if len(col_names) >= 18:
-            col_names[17] = "Food Allergies Yes/No"
-        if len(col_names) >= 19:
-            col_names[18] = "Nutrition Assessment Date"
-        df.columns = col_names
-
-        # Title (no school name)
+        # Fixed title without center name
         title = "Enrollment Checklist 2025–2026"
 
         # Save interim file
@@ -68,58 +55,29 @@ if uploaded_file:
         ws = wb.active
 
         # Formatting
-        filter_row = 3  # header row in the output file
+        filter_row = 3
         ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(ws.max_column)}{ws.max_row}"
 
-        # Bold + wrap headers on row 3
         for cell in ws[filter_row]:
             cell.font = Font(bold=True)
-            cell.alignment = Alignment(wrapText=True)
 
-        # Highlight ONLY column M (13) on header row
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        if ws.max_column >= 13:
-            ws.cell(row=filter_row, column=13).fill = yellow_fill  # column M
+        for col in range(13, 16):  # M to O
+            ws.cell(row=filter_row, column=col).fill = yellow_fill
 
         red_font = Font(color="FF0000", bold=True)
-        cutoff_date = datetime(2025, 5, 15)
+        cutoff_date = datetime(2025, 5, 11)
 
-        # --- helper to parse date-like values without changing your flow ---
-        def _to_datetime(v):
-            if isinstance(v, datetime):
-                return v
-            if isinstance(v, date):
-                return datetime(v.year, v.month, v.day)
-            if isinstance(v, (int, float)):
-                # leave numeric alone unless Excel marks it as a date (handled via cell.is_date)
-                return None
-            if isinstance(v, str):
-                s = v.strip()
-                for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
-                    try:
-                        return datetime.strptime(s, fmt)
-                    except Exception:
-                        pass
-            return None
-
-        # Missing values -> "X" in red, and any date (true Excel date OR parsed string) < cutoff -> red font
-        for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row):
             for cell in row:
-                val = cell.value
-                if val in [None, "", "nan"]:
+                # If empty, mark with X
+                if cell.value in [None, "", "nan"]:
                     cell.value = "X"
                     cell.font = red_font
-                else:
-                    make_red = False
-                    if getattr(cell, "is_date", False) and isinstance(val, (datetime, date)):
-                        dt = val if isinstance(val, datetime) else datetime(val.year, val.month, val.day)
-                        make_red = dt < cutoff_date
-                    else:
-                        dt = _to_datetime(val)
-                        make_red = dt is not None and dt < cutoff_date
-
-                    if make_red:
-                        cell.font = red_font
+                # If date before cutoff, mark with X
+                elif isinstance(cell.value, datetime) and cell.value < cutoff_date:
+                    cell.value = "X"
+                    cell.font = red_font
 
         # Final output
         final_output = "Formatted_Enrollment_Checklist.xlsx"
