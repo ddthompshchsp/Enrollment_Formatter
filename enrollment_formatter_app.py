@@ -4,7 +4,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image
-from datetime import datetime
+from datetime import datetime, date
 
 logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
 st.image(logo, width=300)
@@ -20,7 +20,7 @@ if uploaded_file:
     # Step 1: Load the workbook to find the header row
     wb = load_workbook(uploaded_file)
     ws = wb.active
-    ws.freeze_panes = "B4"
+    ws.freeze_panes = "B4"  # keep PID column + header frozen
 
     header_row = None
     for row in ws.iter_rows(min_row=1, max_row=20):
@@ -68,14 +68,43 @@ if uploaded_file:
         red_font = Font(color="FF0000", bold=True)
         cutoff_date = datetime(2025, 5, 11)
 
-        for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row):
+        # helper to parse possible date strings without extra libs
+        def try_parse_date(v):
+            if isinstance(v, datetime):
+                return v
+            if isinstance(v, date):
+                return datetime(v.year, v.month, v.day)
+            if isinstance(v, str):
+                s = v.strip()
+                for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
+                    try:
+                        return datetime.strptime(s, fmt)
+                    except Exception:
+                        continue
+            # Let openpyxl-marked dates pass through via cell.is_date (handled below)
+            return None
+
+        # Missing values -> "X" in red
+        # Any date (real Excel date or parsed string) before 5/11/2025 -> "X" in red
+        for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
             for cell in row:
-                # If empty, mark with X
-                if cell.value in [None, "", "nan"]:
+                val = cell.value
+                if val in (None, "", "nan"):
                     cell.value = "X"
                     cell.font = red_font
-                # If date before cutoff, mark with X
-                elif isinstance(cell.value, datetime) and cell.value < cutoff_date:
+                    continue
+
+                # Check Excel-native date
+                is_early = False
+                if getattr(cell, "is_date", False) and isinstance(val, (datetime, date)):
+                    dt = val if isinstance(val, datetime) else datetime(val.year, val.month, val.day)
+                    is_early = dt < cutoff_date
+                else:
+                    # Try parsing strings like "04/25/2024", "2025-05-01", etc.
+                    dt = try_parse_date(val)
+                    is_early = dt is not None and dt < cutoff_date
+
+                if is_early:
                     cell.value = "X"
                     cell.font = red_font
 
@@ -85,6 +114,7 @@ if uploaded_file:
 
         with open(final_output, "rb") as f:
             st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
 
 
 
