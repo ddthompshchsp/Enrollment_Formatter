@@ -173,11 +173,11 @@ if uploaded_file:
     if name_col_idx is None:
         name_col_idx = 2
 
-    # Remove "Filtered Total"
+    # Remove "Filtered Total" (just in case)
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
-            if isinstance(v, str) and v.strip().lower().startswith("filtered total:"):
+            if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
 
     # Validate & format data cells
@@ -211,57 +211,27 @@ if uploaded_file:
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
     # ----------------------------
-    # 5) Grand Total row cleanup + totals
+    # 5) Totals at the bottom
     # ----------------------------
-    grand_total_row = None
-    for r in range(1, ws.max_row + 1):
-        for c in range(1, ws.max_column + 1):
-            v = ws.cell(row=r, column=c).value
-            if isinstance(v, str) and "grand total" in v.lower():
-                grand_total_row = r
-                break
-        if grand_total_row:
-            break
-
-    if grand_total_row is None:
-        grand_total_row = ws.max_row + 2
-
-    # Clean up wording like "Grand Total number: ... Filtered Total: ..."
-    for c in range(1, ws.max_column + 1):
-        val = ws.cell(row=grand_total_row, column=c).value
-        if isinstance(val, str) and "grand total" in val.lower():
-            ws.cell(row=grand_total_row, column=c).value = "Grand Total"
-
-    # Put "Total…" under PID if empty
-    pid_cell = ws.cell(row=grand_total_row, column=1)
-    if not (isinstance(pid_cell.value, str) and pid_cell.value.strip()):
-        pid_cell.value = "Grand Total"
+    total_row = ws.max_row + 2
+    ws.cell(row=total_row, column=1, value="Grand Total").font = Font(bold=True)
+    ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
 
     center = Alignment(horizontal="center", vertical="center")
 
     for c in range(1, max_col + 1):
-        cell = ws.cell(row=grand_total_row, column=c)
         if c <= name_col_idx:
             continue
 
         valid_count = 0
-        for r in range(data_start, data_end + 1):
+        for r in range(data_start, ws.max_row + 1):
             if ws.cell(row=r, column=c).value != "X":
                 valid_count += 1
 
-        cell.value = valid_count
+        cell = ws.cell(row=total_row, column=c, value=valid_count)
         cell.alignment = center
-
-    # Bold + top border
-    for c in range(1, max_col + 1):
-        gc = ws.cell(row=grand_total_row, column=c)
-        gc.font = Font(bold=True)
-        gc.border = Border(
-            left=gc.border.left,
-            right=gc.border.right,
-            top=Side(style="thin"),
-            bottom=gc.border.bottom
-        )
+        cell.font = Font(bold=True)
+        cell.border = Border(top=Side(style="thin"))
 
     # ----------------------------
     # 6) Save and download
@@ -271,4 +241,5 @@ if uploaded_file:
 
     with open(final_output, "rb") as f:
         st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
 
