@@ -13,6 +13,9 @@ from openpyxl.utils.datetime import from_excel
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
+# ----------------------------
+# Header / UI
+# ----------------------------
 try:
     logo = Image.open("header_logo.png")
     st.image(logo, width=300)
@@ -25,6 +28,9 @@ st.markdown("Upload your **Enrollment.xlsx** file to receive a formatted version
 uploaded_file = st.file_uploader("Upload Enrollment.xlsx", type=["xlsx"])
 
 if uploaded_file:
+    # ----------------------------
+    # 1) Find the header row
+    # ----------------------------
     wb_src = load_workbook(uploaded_file, data_only=True)
     ws_src = wb_src.active
 
@@ -43,6 +49,9 @@ if uploaded_file:
 
     uploaded_file.seek(0)
 
+    # ----------------------------
+    # 2) Load table into pandas
+    # ----------------------------
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
 
@@ -91,6 +100,9 @@ if uploaded_file:
           .agg(most_recent)
     )
 
+    # ----------------------------
+    # 3) Write temp workbook
+    # ----------------------------
     title = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
@@ -101,6 +113,9 @@ if uploaded_file:
         pd.DataFrame([[timestamp]]).to_excel(writer, index=False, header=False, startrow=1)
         df.to_excel(writer, index=False, startrow=3)
 
+    # ----------------------------
+    # 4) Style with openpyxl
+    # ----------------------------
     wb = load_workbook(temp_path)
     ws = wb.active
 
@@ -109,17 +124,33 @@ if uploaded_file:
     data_end = ws.max_row
     max_col = ws.max_column
 
-    # Freeze PID column + headers
-    ws.freeze_panes = "B4"
+    # Freeze panes so PID (col A) and header row (row 4) stay visible:
+    ws.freeze_panes = "B5"
+
+    # AutoFilter
     ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(max_col)}{data_end}"
 
-    ws["A1"].font = Font(size=14, bold=True)
-    ws["A2"].font = Font(size=10, italic=True, color="555555")
+    # Title + timestamp styling (make them visually separate from the table header)
+    title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
+    ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
+    for c in range(1, max_col + 1):
+        # Row 1 (Title)
+        tcell = ws.cell(row=1, column=c)
+        tcell.fill = title_fill
+        if c == 1:
+            tcell.font = Font(size=14, bold=True)
+            tcell.alignment = Alignment(horizontal="left", vertical="center")
+        # Row 2 (Timestamp)
+        scell = ws.cell(row=2, column=c)
+        scell.fill = ts_fill
+        if c == 1:
+            scell.font = Font(size=10, italic=True, color="555555")
+            scell.alignment = Alignment(horizontal="left", vertical="center")
 
-    # ==== DARK BLUE HEADERS ====
+    # Header styling (dark blue + white bold + wrap)
     header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     for cell in ws[filter_row]:
-        cell.font = Font(bold=True, color="FFFFFF")  # White bold font
+        cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.fill = header_fill
 
@@ -127,7 +158,6 @@ if uploaded_file:
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin")
     )
-    top_border = Border(top=Side(style="thin"))
     red_font = Font(color="FF0000", bold=True)
 
     # Identify key columns
@@ -142,9 +172,9 @@ if uploaded_file:
             if name_col_idx is None and "name" in low:
                 name_col_idx = idx
     if name_col_idx is None:
-        name_col_idx = 2
+        name_col_idx = 2  # fallback
 
-    # Remove "Filtered Total"
+    # Remove any "Filtered Total: ####" cells
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
@@ -165,10 +195,12 @@ if uploaded_file:
 
             dt = coerce_to_dt(val)
             if dt:
+                # Immunization special rule: keep dates before 5/11/2024 in red
                 if c == immun_col and dt < immun_cutoff:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
                     cell.font = red_font
+                # General rule: before cutoff -> X
                 elif dt < cutoff_date:
                     cell.value = "X"
                     cell.font = red_font
@@ -181,7 +213,10 @@ if uploaded_file:
     for c in range(1, max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
-    # GRAND TOTAL row detection
+    # ----------------------------
+    # 5) Totals IN the existing "GRAND TOTAL" row
+    # ----------------------------
+    # Find the row that contains "GRAND TOTAL" (any column, case-insensitive)
     grand_total_row = None
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
@@ -193,14 +228,16 @@ if uploaded_file:
             break
 
     if grand_total_row is None:
-        grand_total_row = ws.max_row + 2
+        grand_total_row = ws.max_row + 2  # fallback if not present
 
+    # Put "Total……" under PID only if that cell is blank
     pid_cell = ws.cell(row=grand_total_row, column=1)
     if not (isinstance(pid_cell.value, str) and pid_cell.value.strip()):
         pid_cell.value = "Total…………"
 
     center = Alignment(horizontal="center", vertical="center")
 
+    # Compute totals to the RIGHT of the Name column
     for c in range(1, max_col + 1):
         cell = ws.cell(row=grand_total_row, column=c)
         if c <= name_col_idx:
@@ -214,18 +251,24 @@ if uploaded_file:
         cell.value = valid_count
         cell.alignment = center
 
-    # Bold + top border
+    # Bold the entire GRAND TOTAL row and give it a top border
     for c in range(1, max_col + 1):
         gc = ws.cell(row=grand_total_row, column=c)
         gc.font = Font(bold=True)
         gc.border = Border(
-            left=gc.border.left, right=gc.border.right,
-            top=Side(style="thin"), bottom=gc.border.bottom
+            left=gc.border.left,
+            right=gc.border.right,
+            top=Side(style="thin"),
+            bottom=gc.border.bottom
         )
 
+    # ----------------------------
+    # 6) Save and download
+    # ----------------------------
     final_output = "Formatted_Enrollment_Checklist.xlsx"
     wb.save(final_output)
 
     with open(final_output, "rb") as f:
         st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
 
