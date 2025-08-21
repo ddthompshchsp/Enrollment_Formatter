@@ -1,4 +1,3 @@
-
 # app.py
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
@@ -125,30 +124,29 @@ if uploaded_file:
     data_end = ws.max_row
     max_col = ws.max_column
 
-    # Freeze panes so PID (col A) and header row (row 4) stay visible:
+    # Freeze panes (PID col + header row)
     ws.freeze_panes = "B5"
 
     # AutoFilter
     ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(max_col)}{data_end}"
 
-    # Title + timestamp styling (make them visually separate from the table header)
+    # Title + timestamp styling
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
     for c in range(1, max_col + 1):
-        # Row 1 (Title)
         tcell = ws.cell(row=1, column=c)
         tcell.fill = title_fill
         if c == 1:
             tcell.font = Font(size=14, bold=True)
             tcell.alignment = Alignment(horizontal="left", vertical="center")
-        # Row 2 (Timestamp)
+
         scell = ws.cell(row=2, column=c)
         scell.fill = ts_fill
         if c == 1:
             scell.font = Font(size=10, italic=True, color="555555")
             scell.alignment = Alignment(horizontal="left", vertical="center")
 
-    # Header styling (dark blue + white bold + wrap)
+    # Header styling (dark blue + white bold + wrap text)
     header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     for cell in ws[filter_row]:
         cell.font = Font(bold=True, color="FFFFFF")
@@ -173,9 +171,9 @@ if uploaded_file:
             if name_col_idx is None and "name" in low:
                 name_col_idx = idx
     if name_col_idx is None:
-        name_col_idx = 2  # fallback
+        name_col_idx = 2
 
-    # Remove any "Filtered Total: ####" cells
+    # Remove "Filtered Total"
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
@@ -196,12 +194,10 @@ if uploaded_file:
 
             dt = coerce_to_dt(val)
             if dt:
-                # Immunization special rule: keep dates before 5/11/2024 in red
                 if c == immun_col and dt < immun_cutoff:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
                     cell.font = red_font
-                # General rule: before cutoff -> X
                 elif dt < cutoff_date:
                     cell.value = "X"
                     cell.font = red_font
@@ -215,9 +211,8 @@ if uploaded_file:
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
     # ----------------------------
-    # 5) Totals IN the existing "GRAND TOTAL" row
+    # 5) Grand Total row cleanup + totals
     # ----------------------------
-    # Find the row that contains "GRAND TOTAL" (any column, case-insensitive)
     grand_total_row = None
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
@@ -229,16 +224,21 @@ if uploaded_file:
             break
 
     if grand_total_row is None:
-        grand_total_row = ws.max_row + 2  # fallback if not present
+        grand_total_row = ws.max_row + 2
 
-    # Put "Total……" under PID only if that cell is blank
+    # Clean up wording like "Grand Total number: ... Filtered Total: ..."
+    for c in range(1, ws.max_column + 1):
+        val = ws.cell(row=grand_total_row, column=c).value
+        if isinstance(val, str) and "grand total" in val.lower():
+            ws.cell(row=grand_total_row, column=c).value = "Grand Total"
+
+    # Put "Total…" under PID if empty
     pid_cell = ws.cell(row=grand_total_row, column=1)
     if not (isinstance(pid_cell.value, str) and pid_cell.value.strip()):
-        pid_cell.value = "Total…………"
+        pid_cell.value = "Grand Total"
 
     center = Alignment(horizontal="center", vertical="center")
 
-    # Compute totals to the RIGHT of the Name column
     for c in range(1, max_col + 1):
         cell = ws.cell(row=grand_total_row, column=c)
         if c <= name_col_idx:
@@ -252,7 +252,7 @@ if uploaded_file:
         cell.value = valid_count
         cell.alignment = center
 
-    # Bold the entire GRAND TOTAL row and give it a top border
+    # Bold + top border
     for c in range(1, max_col + 1):
         gc = ws.cell(row=grand_total_row, column=c)
         gc.font = Font(bold=True)
