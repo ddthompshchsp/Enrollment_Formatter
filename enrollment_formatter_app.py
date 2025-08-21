@@ -40,8 +40,42 @@ if uploaded_file:
         df = pd.read_excel(uploaded_file, header=header_row - 1)
         df.columns = [col.replace("ST: ", "") if isinstance(col, str) else col for col in df.columns]
 
-        # Remove duplicates by PID
-        df = df.dropna(subset=["Participant PID"]).drop_duplicates(subset=["Participant PID"])
+        cutoff_date = datetime(2025, 5, 11)
+
+        # ✅ Collapse rows so each PID has one row, keeping the most recent valid date per column
+        def most_recent(series):
+            # try converting everything to datetimes
+            dates = []
+            for v in series.dropna().unique():
+                if isinstance(v, (datetime, date)):
+                    dt = v if isinstance(v, datetime) else datetime(v.year, v.month, v.day)
+                    dates.append(dt)
+                elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                    try:
+                        dt = from_excel(v)
+                        dates.append(dt)
+                    except Exception:
+                        continue
+                elif isinstance(v, str):
+                    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
+                        try:
+                            dt = datetime.strptime(v.strip(), fmt)
+                            dates.append(dt)
+                            break
+                        except Exception:
+                            continue
+            if dates:
+                return max(dates)  # return the most recent date
+            else:
+                # if not a date, return first non-null value (text, status, etc.)
+                vals = series.dropna().unique()
+                return vals[0] if len(vals) > 0 else None
+
+        df = (
+            df.dropna(subset=["Participant PID"])
+              .groupby("Participant PID", as_index=False)
+              .agg(most_recent)
+        )
 
         # Title & date
         title = "Enrollment Checklist 2025–2026"
@@ -66,67 +100,36 @@ if uploaded_file:
         ws["A1"].font = Font(size=14, bold=True)
         ws["A2"].font = Font(size=10, italic=True, color="555555")
 
+        # Header styling
         for cell in ws[filter_row]:
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
+        # Highlight specific columns (M to O, adjust if needed)
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        for col in range(13, 16):  # highlight columns M to O
+        for col in range(13, 16):
             ws.cell(row=filter_row, column=col).fill = yellow_fill
 
+        # Fonts for missing/early
         red_font = Font(color="FF0000", bold=True)
-        cutoff_date = datetime(2025, 5, 11)
 
-        # helper to parse possible date strings
-        def try_parse_date(v):
-            if isinstance(v, datetime):
-                return v
-            if isinstance(v, date):
-                return datetime(v.year, v.month, v.day)
-            if isinstance(v, str):
-                s = v.strip()
-                for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
-                    try:
-                        return datetime.strptime(s, fmt)
-                    except Exception:
-                        continue
-            return None
-
-        # ✅ Fixed logic for ALL columns (K, L, M, N, etc.)
-        for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        # ✅ Check all cells for missing/early dates
+        for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row,
+                                min_col=1, max_col=ws.max_column):
             for cell in row:
                 val = cell.value
 
-                # Case 1: Empty cell
                 if val in (None, "", "nan"):
                     cell.value = "X"
                     cell.font = red_font
                     continue
 
-                # Case 2: Excel-native date
-                if getattr(cell, "is_date", False) and isinstance(val, (datetime, date)):
-                    if val < cutoff_date:
+                if isinstance(val, (datetime, date)):
+                    dt = val if isinstance(val, datetime) else datetime(val.year, val.month, val.day)
+                    if dt < cutoff_date:
+                        cell.value = "X"
                         cell.font = red_font
                     continue
-
-                # Case 3: Numeric Excel serial (like 45143.0)
-                if isinstance(val, (int, float)) and not isinstance(val, bool):
-                    try:
-                        dt = from_excel(val)  # convert serial to datetime
-                        cell.value = dt       # overwrite with real date
-                        if dt < cutoff_date:
-                            cell.font = red_font
-                    except Exception:
-                        pass
-                    continue
-
-                # Case 4: String that might be a date
-                if isinstance(val, str):
-                    dt = try_parse_date(val)
-                    if dt:
-                        if dt < cutoff_date:
-                            cell.font = red_font
-                    # leave other strings unchanged
 
         # Final output
         final_output = "Formatted_Enrollment_Checklist.xlsx"
@@ -134,6 +137,7 @@ if uploaded_file:
 
         with open(final_output, "rb") as f:
             st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
 
 
 
