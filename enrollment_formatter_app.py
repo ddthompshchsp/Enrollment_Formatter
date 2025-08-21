@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import from_excel
 
 # ----------------------------
-# Streamlit setup (must be first)
+# Streamlit setup
 # ----------------------------
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
@@ -20,7 +20,7 @@ st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 # Header / UI
 # ----------------------------
 try:
-    logo = Image.open("header_logo.png")  # file should live next to app.py
+    logo = Image.open("header_logo.png")
     st.image(logo, width=300)
 except Exception:
     pass
@@ -32,7 +32,7 @@ uploaded_file = st.file_uploader("Upload Enrollment.xlsx", type=["xlsx"])
 
 if uploaded_file:
     # ----------------------------
-    # 1) Find the header row in the source
+    # 1) Find the header row
     # ----------------------------
     wb_src = load_workbook(uploaded_file, data_only=True)
     ws_src = wb_src.active
@@ -47,19 +47,19 @@ if uploaded_file:
             break
 
     if not header_row:
-        st.error("Couldn't find 'ST: Participant PID' in the file. Please upload the correct file.")
+        st.error("Couldn't find 'ST: Participant PID' in the file.")
         st.stop()
 
-    # IMPORTANT: rewind the file pointer before pandas reads it again
     uploaded_file.seek(0)
 
     # ----------------------------
-    # 2) Load the table into pandas from the detected header row
+    # 2) Load table into pandas
     # ----------------------------
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
 
     cutoff_date = datetime(2025, 5, 11)
+    immun_cutoff = datetime(2024, 5, 11)
 
     # Helpers
     def coerce_to_dt(v):
@@ -95,7 +95,7 @@ if uploaded_file:
         return texts[0] if texts else None
 
     if "Participant PID" not in df.columns:
-        st.error("The file is missing the 'Participant PID' column after parsing.")
+        st.error("The file is missing 'Participant PID'.")
         st.stop()
 
     df = (
@@ -145,10 +145,32 @@ if uploaded_file:
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin")
     )
+    top_border = Border(top=Side(style="thin"))
 
     red_font = Font(color="FF0000", bold=True)
 
-    # Check/format data cells
+    # Identify key columns
+    immun_col = None
+    name_col_idx = None
+    headers = [ws.cell(row=filter_row, column=c).value for c in range(1, max_col + 1)]
+    for idx, h in enumerate(headers, start=1):
+        if isinstance(h, str):
+            low = h.lower()
+            if immun_col is None and "immun" in low:
+                immun_col = idx
+            if name_col_idx is None and "name" in low:
+                name_col_idx = idx
+    if name_col_idx is None:
+        name_col_idx = 2  # fallback
+
+    # Clear any cells that look like "Filtered Total: ####"
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(row=r, column=c).value
+            if isinstance(v, str) and v.strip().lower().startswith("filtered total:"):
+                ws.cell(row=r, column=c).value = None
+
+    # Validate & format data cells
     for r in range(data_start, data_end + 1):
         for c in range(1, max_col + 1):
             cell = ws.cell(row=r, column=c)
@@ -162,13 +184,20 @@ if uploaded_file:
 
             dt = coerce_to_dt(val)
             if dt:
-                if dt < cutoff_date:
+                # Immunization special rule
+                if c == immun_col and dt < immun_cutoff:
+                    cell.value = dt
+                    cell.number_format = "m/d/yy"
+                    cell.font = red_font
+                # General rule
+                elif dt < cutoff_date:
                     cell.value = "X"
                     cell.font = red_font
                 else:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
                 continue
+            # non-date: leave as-is
 
     # Set column widths
     width_map = {1: 16, 2: 22}
@@ -176,31 +205,38 @@ if uploaded_file:
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
     # ----------------------------
-    # 5) Totals (one row only)
+    # 5) Totals IN the existing "GRAND TOTAL" row
     # ----------------------------
-    headers = [ws.cell(row=filter_row, column=c).value for c in range(1, max_col + 1)]
-    name_col_idx = None
-    for idx, h in enumerate(headers, start=1):
-        if isinstance(h, str) and "name" in h.lower():
-            name_col_idx = idx
+    # Find the row that contains "GRAND TOTAL" (any column, case-insensitive)
+    grand_total_row = None
+    for r in range(1, ws.max_row + 1):
+        found = False
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(row=r, column=c).value
+            if isinstance(v, str) and "grand total" in v.lower():
+                grand_total_row = r
+                found = True
+                break
+        if found:
             break
-    if name_col_idx is None:
-        name_col_idx = 2
 
-    total_row = ws.max_row + 2
+    if grand_total_row is None:
+        # If there is no "GRAND TOTAL" row, create one just below the header (or fallback to bottom)
+        grand_total_row = ws.max_row + 2
 
-    ws.cell(row=total_row, column=1, value="Total…………").font = Font(bold=True)
-    ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
+    # Label (under PID) — only if the PID cell is empty or not already "GRAND TOTAL"
+    pid_cell = ws.cell(row=grand_total_row, column=1)
+    if not (isinstance(pid_cell.value, str) and pid_cell.value.strip()):
+        pid_cell.value = "Total…………"
 
+    # Compute and place totals to the RIGHT of the Name column
     center = Alignment(horizontal="center", vertical="center")
-    top_border = Border(top=Side(style="thin"))
-
-    total_cells = max(0, data_end - data_start + 1)
-
     for c in range(1, max_col + 1):
-        cell = ws.cell(row=total_row, column=c)
+        cell = ws.cell(row=grand_total_row, column=c)
+
+        # Only start numbers after the Name column
         if c <= name_col_idx:
-            cell.value = None
+            # Keep any existing label in those early columns, otherwise leave blank
             continue
 
         valid_count = 0
@@ -210,8 +246,15 @@ if uploaded_file:
 
         cell.value = valid_count
         cell.alignment = center
-        cell.font = Font(bold=True)
-        cell.border = top_border
+
+    # Bold + top border the whole GRAND TOTAL row
+    for c in range(1, max_col + 1):
+        gc = ws.cell(row=grand_total_row, column=c)
+        gc.font = Font(bold=True)
+        gc.border = Border(
+            left=gc.border.left, right=gc.border.right,
+            top=Side(style="thin"), bottom=gc.border.bottom
+        )
 
     # ----------------------------
     # 6) Save and download
@@ -221,5 +264,4 @@ if uploaded_file:
 
     with open(final_output, "rb") as f:
         st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
-
 
