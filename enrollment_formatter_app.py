@@ -103,14 +103,16 @@ if uploaded_file:
     # ----------------------------
     # 3) Write temp workbook
     # ----------------------------
-    title = "Enrollment Checklist 2025–2026"
+    title_text = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
-    timestamp = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
+    timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
 
     temp_path = "Enrollment_Cleaned.xlsx"
     with pd.ExcelWriter(temp_path, engine="openpyxl") as writer:
-        pd.DataFrame([[title]]).to_excel(writer, index=False, header=False, startrow=0)
-        pd.DataFrame([[timestamp]]).to_excel(writer, index=False, header=False, startrow=1)
+        # We'll overwrite these cells during styling (merging/centering),
+        # but writing placeholders keeps rows allocated.
+        pd.DataFrame([[title_text]]).to_excel(writer, index=False, header=False, startrow=0)
+        pd.DataFrame([[timestamp_text]]).to_excel(writer, index=False, header=False, startrow=1)
         df.to_excel(writer, index=False, startrow=3)
 
     # ----------------------------
@@ -119,40 +121,47 @@ if uploaded_file:
     wb = load_workbook(temp_path)
     ws = wb.active
 
-    filter_row = 4
-    data_start = filter_row + 1
-    data_end = ws.max_row
+    filter_row = 4               # header row of the data table
+    data_start = filter_row + 1  # first data row
+    data_end = ws.max_row        # last data row (before we add totals)
     max_col = ws.max_column
 
-    # Freeze panes (PID col + header row)
+    # Freeze panes so PID (col A) and header row (row 4) stay visible:
     ws.freeze_panes = "B5"
 
-    # AutoFilter
+    # AutoFilter on the table
     ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(max_col)}{data_end}"
 
-    # Title + timestamp styling
+    # ==== Title + timestamp styling (MERGED & CENTERED, static width) ====
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
-    for c in range(1, max_col + 1):
-        tcell = ws.cell(row=1, column=c)
-        tcell.fill = title_fill
-        if c == 1:
-            tcell.font = Font(size=14, bold=True)
-            tcell.alignment = Alignment(horizontal="left", vertical="center")
 
-        scell = ws.cell(row=2, column=c)
-        scell.fill = ts_fill
-        if c == 1:
-            scell.font = Font(size=10, italic=True, color="555555")
-            scell.alignment = Alignment(horizontal="left", vertical="center")
+    # Merge across all columns currently present
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
 
-    # Header styling (dark blue + white bold + wrap text)
+    # Title cell
+    tcell = ws.cell(row=1, column=1)
+    tcell.value = title_text
+    tcell.font = Font(size=14, bold=True)
+    tcell.alignment = Alignment(horizontal="center", vertical="center")
+    tcell.fill = title_fill
+
+    # Timestamp cell
+    scell = ws.cell(row=2, column=1)
+    scell.value = timestamp_text
+    scell.font = Font(size=10, italic=True, color="555555")
+    scell.alignment = Alignment(horizontal="center", vertical="center")
+    scell.fill = ts_fill
+
+    # ==== Header styling (dark blue + white bold + wrap text) ====
     header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     for cell in ws[filter_row]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.fill = header_fill
 
+    # Borders & fonts
     thin_border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin")
@@ -171,9 +180,9 @@ if uploaded_file:
             if name_col_idx is None and "name" in low:
                 name_col_idx = idx
     if name_col_idx is None:
-        name_col_idx = 2
+        name_col_idx = 2  # fallback if no "Name" header
 
-    # Remove "Filtered Total" (just in case)
+    # Remove any stray "Filtered Total: ..." wording anywhere (just in case)
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
@@ -194,16 +203,20 @@ if uploaded_file:
 
             dt = coerce_to_dt(val)
             if dt:
+                # Immunization special rule: keep dates before 5/11/2024 in red
                 if c == immun_col and dt < immun_cutoff:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
                     cell.font = red_font
+                # General rule: before cutoff -> X
                 elif dt < cutoff_date:
                     cell.value = "X"
                     cell.font = red_font
                 else:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
+                continue
+            # non-date: leave as-is
 
     # Column widths
     width_map = {1: 16, 2: 22}
@@ -211,20 +224,19 @@ if uploaded_file:
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
     # ----------------------------
-    # 5) Totals at the bottom
+    # 5) Totals at the bottom (no extra wording)
     # ----------------------------
     total_row = ws.max_row + 2
     ws.cell(row=total_row, column=1, value="Grand Total").font = Font(bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
 
     center = Alignment(horizontal="center", vertical="center")
-
     for c in range(1, max_col + 1):
         if c <= name_col_idx:
             continue
 
         valid_count = 0
-        for r in range(data_start, ws.max_row + 1):
+        for r in range(data_start, data_end + 1):
             if ws.cell(row=r, column=c).value != "X":
                 valid_count += 1
 
