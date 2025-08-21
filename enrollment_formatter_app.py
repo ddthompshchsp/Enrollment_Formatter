@@ -3,11 +3,12 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.datetime import from_excel
 from PIL import Image
 from datetime import datetime, date
 
 # Streamlit UI
-logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
+logo = Image.open("header_logo.png")  # Must be in the same directory
 st.image(logo, width=300)
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
@@ -42,22 +43,28 @@ if uploaded_file:
         # Remove duplicates by PID
         df = df.dropna(subset=["Participant PID"]).drop_duplicates(subset=["Participant PID"])
 
-        # Fixed title without center name
+        # Title & date
         title = "Enrollment Checklist 2025–2026"
+        timestamp = datetime.now().strftime("Generated on %B %d, %Y at %I:%M %p")
 
         # Save interim file
         temp_path = "Enrollment_Cleaned.xlsx"
         with pd.ExcelWriter(temp_path, engine="openpyxl") as writer:
             pd.DataFrame([[title]]).to_excel(writer, index=False, header=False, startrow=0)
-            df.to_excel(writer, index=False, startrow=2)
+            pd.DataFrame([[timestamp]]).to_excel(writer, index=False, header=False, startrow=1)
+            df.to_excel(writer, index=False, startrow=3)
 
         # Step 3: Load for formatting
         wb = load_workbook(temp_path)
         ws = wb.active
 
         # Formatting
-        filter_row = 3
+        filter_row = 4
         ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(ws.max_column)}{ws.max_row}"
+
+        # Title styling
+        ws["A1"].font = Font(size=14, bold=True)
+        ws["A2"].font = Font(size=10, italic=True, color="555555")
 
         for cell in ws[filter_row]:
             cell.font = Font(bold=True)
@@ -70,7 +77,7 @@ if uploaded_file:
         red_font = Font(color="FF0000", bold=True)
         cutoff_date = datetime(2025, 5, 11)
 
-        # helper to parse possible date strings without extra libs
+        # helper to parse possible date strings
         def try_parse_date(v):
             if isinstance(v, datetime):
                 return v
@@ -85,7 +92,7 @@ if uploaded_file:
                         continue
             return None
 
-        # ✅ Fixed logic: keep dates, only mark missing or early
+        # ✅ Fixed logic for ALL columns (K, L, M, N, etc.)
         for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
             for cell in row:
                 val = cell.value
@@ -99,16 +106,27 @@ if uploaded_file:
                 # Case 2: Excel-native date
                 if getattr(cell, "is_date", False) and isinstance(val, (datetime, date)):
                     if val < cutoff_date:
-                        cell.font = red_font   # 🔴 keep the date but make it red
+                        cell.font = red_font
                     continue
 
-                # Case 3: String that might be a date
+                # Case 3: Numeric Excel serial (like 45143.0)
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    try:
+                        dt = from_excel(val)  # convert serial to datetime
+                        cell.value = dt       # overwrite with real date
+                        if dt < cutoff_date:
+                            cell.font = red_font
+                    except Exception:
+                        pass
+                    continue
+
+                # Case 4: String that might be a date
                 if isinstance(val, str):
                     dt = try_parse_date(val)
                     if dt:
                         if dt < cutoff_date:
-                            cell.font = red_font   # 🔴 keep string date but make it red
-                    # leave all other strings unchanged
+                            cell.font = red_font
+                    # leave other strings unchanged
 
         # Final output
         final_output = "Formatted_Enrollment_Checklist.xlsx"
@@ -116,5 +134,6 @@ if uploaded_file:
 
         with open(final_output, "rb") as f:
             st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
 
 
