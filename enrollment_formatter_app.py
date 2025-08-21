@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from PIL import Image
 from datetime import datetime, date
 
+# Streamlit UI
 logo = Image.open("header_logo.png")  # Make sure this image is in the same directory
 st.image(logo, width=300)
 
@@ -60,9 +61,10 @@ if uploaded_file:
 
         for cell in ws[filter_row]:
             cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
 
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        for col in range(13, 16):  # M to O
+        for col in range(13, 16):  # highlight columns M to O
             ws.cell(row=filter_row, column=col).fill = yellow_fill
 
         red_font = Font(color="FF0000", bold=True)
@@ -81,32 +83,32 @@ if uploaded_file:
                         return datetime.strptime(s, fmt)
                     except Exception:
                         continue
-            # Let openpyxl-marked dates pass through via cell.is_date (handled below)
             return None
 
-        # Missing values -> "X" in red
-        # Any date (real Excel date or parsed string) before 5/11/2025 -> "X" in red
+        # ✅ Fixed logic: keep dates, only mark missing or early
         for row in ws.iter_rows(min_row=filter_row + 1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
             for cell in row:
                 val = cell.value
+
+                # Case 1: Empty cell
                 if val in (None, "", "nan"):
                     cell.value = "X"
                     cell.font = red_font
                     continue
 
-                # Check Excel-native date
-                is_early = False
+                # Case 2: Excel-native date
                 if getattr(cell, "is_date", False) and isinstance(val, (datetime, date)):
-                    dt = val if isinstance(val, datetime) else datetime(val.year, val.month, val.day)
-                    is_early = dt < cutoff_date
-                else:
-                    # Try parsing strings like "04/25/2024", "2025-05-01", etc.
-                    dt = try_parse_date(val)
-                    is_early = dt is not None and dt < cutoff_date
+                    if val < cutoff_date:
+                        cell.font = red_font   # 🔴 keep the date but make it red
+                    continue
 
-                if is_early:
-                    cell.value = "X"
-                    cell.font = red_font
+                # Case 3: String that might be a date
+                if isinstance(val, str):
+                    dt = try_parse_date(val)
+                    if dt:
+                        if dt < cutoff_date:
+                            cell.font = red_font   # 🔴 keep string date but make it red
+                    # leave all other strings unchanged
 
         # Final output
         final_output = "Formatted_Enrollment_Checklist.xlsx"
