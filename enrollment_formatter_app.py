@@ -1,8 +1,8 @@
-
 # app.py
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
+import re
 import pandas as pd
 import streamlit as st
 from PIL import Image
@@ -14,24 +14,83 @@ from openpyxl.utils.datetime import from_excel
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
-# ----------------------------
-# Header / UI
-# ----------------------------
 try:
     logo = Image.open("header_logo.png")
     st.image(logo, width=300)
 except Exception:
     pass
 
-st.title("HCHSP Enrollment Checklist Formatter (2025–2026)")
+st.title("HCHSP Enrollment Checklist (2025–2026)")
 st.markdown("Upload your **Enrollment.xlsx** file to receive a formatted version.")
 
 uploaded_file = st.file_uploader("Upload Enrollment.xlsx", type=["xlsx"])
 
+def coerce_to_dt(v):
+    if pd.isna(v):
+        return None
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, date):
+        return datetime(v.year, v.month, v.day)
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        try:
+            return from_excel(v)
+        except Exception:
+            return None
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                continue
+    return None
+
+def most_recent(series):
+    dates, texts = [], []
+    for v in pd.unique(series.dropna()):
+        dt = coerce_to_dt(v)
+        if dt:
+            dates.append(dt)
+        else:
+            s = str(v).strip()
+            if s:
+                texts.append(s)
+    if dates:
+        return max(dates)
+    return texts[0] if texts else None
+
+def normalize(s: str) -> str:
+    s = s.lower()
+    s = re.sub(r"[\s\-\–\—_:()]+", " ", s)
+    return s.strip()
+
+def find_cols(cols, keywords):
+    out = []
+    for c in cols:
+        if not isinstance(c, str):
+            continue
+        n = normalize(c)
+        if any(k in n for k in keywords):
+            out.append(c)
+    return out
+
+def collapse_row_values(row, col_names):
+    vals = []
+    for c in col_names:
+        if c in row and pd.notna(row[c]) and str(row[c]).strip() != "":
+            vals.append(row[c])
+    if not vals:
+        return None
+    dts = [coerce_to_dt(v) for v in vals]
+    dts = [d for d in dts if d]
+    if dts:
+        return max(dts)
+    return str(vals[0]).strip()
+
 if uploaded_file:
-    # ----------------------------
-    # 1) Find the header row
-    # ----------------------------
     wb_src = load_workbook(uploaded_file, data_only=True)
     ws_src = wb_src.active
 
@@ -43,53 +102,16 @@ if uploaded_file:
                 break
         if header_row:
             break
-
     if not header_row:
         st.error("Couldn't find 'ST: Participant PID' in the file.")
         st.stop()
 
     uploaded_file.seek(0)
-
-    # ----------------------------
-    # 2) Load table into pandas
-    # ----------------------------
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
 
-    cutoff_date = datetime(2025, 5, 11)
-    immun_cutoff = datetime(2024, 5, 11)
-
-    def coerce_to_dt(v):
-        if pd.isna(v):
-            return None
-        if isinstance(v, datetime):
-            return v
-        if isinstance(v, date):
-            return datetime(v.year, v.month, v.day)
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            try:
-                return from_excel(v)
-            except Exception:
-                return None
-        if isinstance(v, str):
-            for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
-                try:
-                    return datetime.strptime(v.strip(), fmt)
-                except Exception:
-                    continue
-        return None
-
-    def most_recent(series):
-        dates, texts = [], []
-        for v in pd.unique(series.dropna()):
-            dt = coerce_to_dt(v)
-            if dt:
-                dates.append(dt)
-            else:
-                texts.append(v)
-        if dates:
-            return max(dates)
-        return texts[0] if texts else None
+    general_cutoff = datetime(2025, 5, 11)
+    field_cutoff   = datetime(2025, 8, 1)  # for Immunizations, TB, Lead
 
     if "Participant PID" not in df.columns:
         st.error("The file is missing 'Participant PID'.")
@@ -101,96 +123,104 @@ if uploaded_file:
           .agg(most_recent)
     )
 
-    # ----------------------------
-    # 3) Write temp workbook
-    # ----------------------------
+    # Detect columns robustly (English + Spanish)
+    all_cols = list(df.columns)
+    immun_cols = find_cols(all_cols, ["immun"])  # e.g., "H: Immunization - Immunization Certificate Received Date"
+    tb_cols    = find_cols(all_cols, [" tb ", "tb ", " tb", "t b", "t.b", "t b questionnaire", "tuberc", "ppd"])
+    lead_cols  = find_cols(all_cols, ["lead", "pb"])
+
+    # If your TB/Lead headers include “Questionnaire: Date” and “(Spanish): Date”, the above will catch both.
+
+    # Collapse to single columns
+    if immun_cols:
+        df["Immunizations"] = df.apply(lambda r: collapse_row_values(r, immun_cols), axis=1)
+        df.drop(columns=[c for c in immun_cols if c in df.columns], inplace=True)
+
+    if tb_cols:
+        df["TB Test"] = df.apply(lambda r: collapse_row_values(r, tb_cols), axis=1)
+        df.drop(columns=[c for c in tb_cols if c in df.columns], inplace=True)
+
+    if lead_cols:
+        df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
+        df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
+
+    # Optional: small debug aid
+    if st.checkbox("Show detected column groups", value=False):
+        st.write({"Immunizations": immun_cols, "TB": tb_cols, "Lead": lead_cols})
+
+    # Write temp workbook
     title_text = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
 
     temp_path = "Enrollment_Cleaned.xlsx"
     with pd.ExcelWriter(temp_path, engine="openpyxl") as writer:
-        # We'll overwrite these cells during styling (merging/centering),
-        # but writing placeholders keeps rows allocated.
         pd.DataFrame([[title_text]]).to_excel(writer, index=False, header=False, startrow=0)
         pd.DataFrame([[timestamp_text]]).to_excel(writer, index=False, header=False, startrow=1)
         df.to_excel(writer, index=False, startrow=3)
 
-    # ----------------------------
-    # 4) Style with openpyxl
-    # ----------------------------
     wb = load_workbook(temp_path)
     ws = wb.active
 
-    filter_row = 4               # header row of the data table
-    data_start = filter_row + 1  # first data row
-    data_end = ws.max_row        # last data row (before we add totals)
+    filter_row = 4
+    data_start = filter_row + 1
+    data_end = ws.max_row
     max_col = ws.max_column
 
-    # Freeze panes so PID (col A) and header row (row 4) stay visible:
     ws.freeze_panes = "B5"
-
-    # AutoFilter on the table
     ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(max_col)}{data_end}"
 
-    # ==== Title + timestamp styling (MERGED & CENTERED, static width) ====
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
 
-    # Merge across all columns currently present
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
 
-    # Title cell
-    tcell = ws.cell(row=1, column=1)
-    tcell.value = title_text
+    tcell = ws.cell(row=1, column=1); tcell.value = title_text
     tcell.font = Font(size=14, bold=True)
     tcell.alignment = Alignment(horizontal="center", vertical="center")
     tcell.fill = title_fill
 
-    # Timestamp cell
-    scell = ws.cell(row=2, column=1)
-    scell.value = timestamp_text
+    scell = ws.cell(row=2, column=1); scell.value = timestamp_text
     scell.font = Font(size=10, italic=True, color="555555")
     scell.alignment = Alignment(horizontal="center", vertical="center")
     scell.fill = ts_fill
 
-    # ==== Header styling (dark blue + white bold + wrap text) ====
     header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     for cell in ws[filter_row]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.fill = header_fill
 
-    # Borders & fonts
-    thin_border = Border(
-        left=Side(style="thin"), right=Side(style="thin"),
-        top=Side(style="thin"), bottom=Side(style="thin")
-    )
+    thin_border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                         top=Side(style="thin"), bottom=Side(style="thin"))
     red_font = Font(color="FF0000", bold=True)
 
-    # Identify key columns
-    immun_col = None
-    name_col_idx = None
+    # Find our new columns by exact name first; fall back to substring match
     headers = [ws.cell(row=filter_row, column=c).value for c in range(1, max_col + 1)]
-    for idx, h in enumerate(headers, start=1):
-        if isinstance(h, str):
-            low = h.lower()
-            if immun_col is None and "immun" in low:
-                immun_col = idx
-            if name_col_idx is None and "name" in low:
-                name_col_idx = idx
-    if name_col_idx is None:
-        name_col_idx = 2  # fallback if no "Name" header
+    def find_idx_exact(name):
+        for i, h in enumerate(headers, start=1):
+            if h == name:
+                return i
+        return None
+    def find_idx_sub(sub):
+        for i, h in enumerate(headers, start=1):
+            if isinstance(h, str) and sub in h.lower():
+                return i
+        return None
 
-    # Remove any stray "Filtered Total: ..." wording anywhere (just in case)
+    name_col_idx = next((i for i,h in enumerate(headers,1) if isinstance(h,str) and "name" in h.lower()), 2)
+    immun_idx = find_idx_exact("Immunizations") or find_idx_sub("immun")
+    tb_idx    = find_idx_exact("TB Test")       or find_idx_sub("tb")
+    lead_idx  = find_idx_exact("Lead Test")     or find_idx_sub("lead")
+
+    # Clean any stray "Filtered Total" text
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
             if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
 
-    # Validate & format data cells
     for r in range(data_start, data_end + 1):
         for c in range(1, max_col + 1):
             cell = ws.cell(row=r, column=c)
@@ -203,30 +233,43 @@ if uploaded_file:
                 continue
 
             dt = coerce_to_dt(val)
-            if dt:
-                # Immunization special rule: keep dates before 5/11/2024 in red
-                if c == immun_col and dt < immun_cutoff:
+
+            if immun_idx and c == immun_idx:
+                if dt:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
-                    cell.font = red_font
-                # General rule: before cutoff -> X
-                elif dt < cutoff_date:
+                    if dt < field_cutoff:
+                        cell.font = red_font
+                continue
+
+            if tb_idx and c == tb_idx:
+                if dt:
+                    cell.value = dt
+                    cell.number_format = "m/d/yy"
+                    if dt < field_cutoff:
+                        cell.font = red_font
+                continue
+
+            if lead_idx and c == lead_idx:
+                if dt:
+                    cell.value = dt
+                    cell.number_format = "m/d/yy"
+                    if dt < field_cutoff:
+                        cell.font = red_font
+                continue
+
+            if dt:
+                if dt < general_cutoff:
                     cell.value = "X"
                     cell.font = red_font
                 else:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
-                continue
-            # non-date: leave as-is
 
-    # Column widths
     width_map = {1: 16, 2: 22}
     for c in range(1, max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
-    # ----------------------------
-    # 5) Totals at the bottom (no extra wording)
-    # ----------------------------
     total_row = ws.max_row + 2
     ws.cell(row=total_row, column=1, value="Grand Total").font = Font(bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
@@ -235,23 +278,19 @@ if uploaded_file:
     for c in range(1, max_col + 1):
         if c <= name_col_idx:
             continue
-
-        valid_count = 0
+        valid = 0
         for r in range(data_start, data_end + 1):
             if ws.cell(row=r, column=c).value != "X":
-                valid_count += 1
+                valid += 1
+        cl = ws.cell(row=total_row, column=c, value=valid)
+        cl.alignment = center
+        cl.font = Font(bold=True)
+        cl.border = Border(top=Side(style="thin"))
 
-        cell = ws.cell(row=total_row, column=c, value=valid_count)
-        cell.alignment = center
-        cell.font = Font(bold=True)
-        cell.border = Border(top=Side(style="thin"))
-
-    # ----------------------------
-    # 6) Save and download
-    # ----------------------------
     final_output = "Formatted_Enrollment_Checklist.xlsx"
     wb.save(final_output)
 
     with open(final_output, "rb") as f:
         st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
 
