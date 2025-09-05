@@ -1,4 +1,3 @@
-
 # app.py
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
@@ -95,7 +94,7 @@ def collapse_row_values(row, col_names):
 
 # ---------- Main ----------
 if uploaded_file:
-    # 1) Locate header row by the ST: Participant PID label
+    # 1) Locate header row
     wb_src = load_workbook(uploaded_file, data_only=True)
     ws_src = wb_src.active
 
@@ -133,7 +132,7 @@ if uploaded_file:
           .agg(most_recent)
     )
 
-    # 3) Detect and collapse Immunizations, TB, Lead (English + Spanish variants)
+    # 3) Detect & collapse Immunizations, TB, Lead (handles English/Spanish headers)
     all_cols = list(df.columns)
     immun_cols = find_cols(all_cols, ["immun"])
     tb_cols    = find_cols(all_cols, ["tb", "tuberc", "ppd"])
@@ -151,7 +150,7 @@ if uploaded_file:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
 
-    # 4) Write a temp workbook with title/timestamp and data starting row 4
+    # 4) Write temp workbook (title/timestamp + data starting row 4)
     title_text = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
@@ -162,7 +161,7 @@ if uploaded_file:
         pd.DataFrame([[timestamp_text]]).to_excel(writer, index=False, header=False, startrow=1)
         df.to_excel(writer, index=False, startrow=3)
 
-    # 5) Style
+    # 5) Style & dynamic totals
     wb = load_workbook(temp_path)
     ws = wb.active
 
@@ -171,11 +170,14 @@ if uploaded_file:
     data_end = ws.max_row
     max_col = ws.max_column
 
-    # Freeze only rows above header + header row
-    ws.freeze_panes = "A5"  # rows 1–4 frozen; no frozen column
+    # Freeze rows 1–4 (header only)
+    ws.freeze_panes = "A5"
 
+    # AutoFilter
+    from openpyxl.utils import get_column_letter
     ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(max_col)}{data_end}"
 
+    # Title / timestamp
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
 
@@ -192,12 +194,14 @@ if uploaded_file:
     scell.alignment = Alignment(horizontal="center", vertical="center")
     scell.fill = ts_fill
 
+    # Header style
     header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     for cell in ws[filter_row]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.fill = header_fill
 
+    # Borders / fonts
     thin_border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin")
@@ -225,14 +229,14 @@ if uploaded_file:
     tb_idx    = find_idx_exact("TB Test")       or find_idx_sub("tb")
     lead_idx  = find_idx_exact("Lead Test")     or find_idx_sub("lead")
 
-    # Clear stray "Filtered Total" text
+    # Clear stray "Filtered Total"
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
             if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
 
-    # Fill + rules
+    # Validate & format data cells
     for r in range(data_start, data_end + 1):
         for c in range(1, max_col + 1):
             cell = ws.cell(row=r, column=c)
@@ -287,23 +291,40 @@ if uploaded_file:
     for c in range(1, max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
-    # Totals row
+    # -------- Helper column for dynamic filtering --------
+    helper_col = max_col + 1
+    helper_letter = get_column_letter(helper_col)
+    ws.cell(row=filter_row, column=helper_col, value="VisibleFlag").font = Font(bold=True)
+    # Put 1 for visible rows, 0 for filtered-out, using SUBTOTAL on column A
+    anchor = f"$A${data_start}"
+    for r in range(data_start, data_end + 1):
+        ws.cell(row=r, column=helper_col).value = f'=SUBTOTAL(103,OFFSET({anchor},ROW()-ROW({anchor}),0))'
+    # Hide helper column
+    ws.column_dimensions[helper_letter].hidden = True
+
+    # -------- Dynamic (filter-aware) Grand Total --------
     total_row = ws.max_row + 2
     ws.cell(row=total_row, column=1, value="Grand Total").font = Font(bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
 
     center = Alignment(horizontal="center", vertical="center")
+    top_border = Border(top=Side(style="thin"))
+    vis_range = f"${helper_letter}${data_start}:${helper_letter}${data_end}"
+
     for c in range(1, max_col + 1):
         if c <= name_col_idx:
             continue
-        valid = 0
-        for r in range(data_start, data_end + 1):
-            if ws.cell(row=r, column=c).value != "X":
-                valid += 1
-        cell = ws.cell(row=total_row, column=c, value=valid)
+        col_letter = get_column_letter(c)
+        data_range = f"${col_letter}${data_start}:${col_letter}${data_end}"
+        # Count visible rows where cell is not blank and not "X"
+        formula = (
+            f'=SUMPRODUCT(--({vis_range}=1),--({data_range}<>""),--({data_range}<>"X"))'
+        )
+        cell = ws.cell(row=total_row, column=c)
+        cell.value = formula
         cell.alignment = center
         cell.font = Font(bold=True)
-        cell.border = Border(top=Side(style="thin"))
+        cell.border = top_border
 
     # Save + download
     final_output = "Formatted_Enrollment_Checklist.xlsx"
@@ -311,4 +332,5 @@ if uploaded_file:
 
     with open(final_output, "rb") as f:
         st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
 
