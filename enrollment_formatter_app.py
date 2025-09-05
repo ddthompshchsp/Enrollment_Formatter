@@ -12,9 +12,11 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import from_excel
 from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.label import DataLabelList
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
+# ---------------- Header / UI ----------------
 try:
     logo = Image.open("header_logo.png")
     st.image(logo, width=300)
@@ -26,6 +28,7 @@ st.markdown("Upload your **Enrollment.xlsx** file to receive a formatted version
 
 uploaded_file = st.file_uploader("Upload Enrollment.xlsx", type=["xlsx"])
 
+# ---------------- Helpers ----------------
 def coerce_to_dt(v):
     if pd.isna(v):
         return None
@@ -91,7 +94,9 @@ def collapse_row_values(row, col_names):
         return max(dts)
     return str(vals[0]).strip()
 
+# ---------------- Main ----------------
 if uploaded_file:
+    # 1) Find header row via "ST: Participant PID"
     wb_src = load_workbook(uploaded_file, data_only=True)
     ws_src = wb_src.active
 
@@ -103,27 +108,32 @@ if uploaded_file:
                 break
         if header_row:
             break
+
     if not header_row:
         st.error("Couldn't find 'ST: Participant PID' in the file.")
         st.stop()
 
     uploaded_file.seek(0)
+
+    # 2) Load & normalize
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
 
-    general_cutoff = datetime(2025, 5, 11)
-    field_cutoff   = datetime(2025, 8, 1)
+    general_cutoff = datetime(2025, 5, 11)  # other date fields < this => "X"
+    field_cutoff   = datetime(2025, 8, 1)   # Immunizations/TB/Lead < this => red date (keep value)
 
     if "Participant PID" not in df.columns:
         st.error("The file is missing 'Participant PID'.")
         st.stop()
 
+    # One row per PID (most recent across dups)
     df = (
         df.dropna(subset=["Participant PID"])
           .groupby("Participant PID", as_index=False)
           .agg(most_recent)
     )
 
+    # 3) Collapse Immunizations, TB, Lead
     all_cols = list(df.columns)
     immun_cols = find_cols(all_cols, ["immun"])
     tb_cols    = find_cols(all_cols, ["tb", "tuberc", "ppd"])
@@ -141,6 +151,7 @@ if uploaded_file:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
 
+    # 4) Write workbook scaffold
     title_text = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
@@ -151,6 +162,7 @@ if uploaded_file:
         pd.DataFrame([[timestamp_text]]).to_excel(writer, index=False, header=False, startrow=1)
         df.to_excel(writer, index=False, startrow=3)
 
+    # 5) Style + rules + dynamic totals
     wb = load_workbook(temp_path)
     ws = wb.active
 
@@ -159,9 +171,13 @@ if uploaded_file:
     data_end = ws.max_row
     max_col = ws.max_column
 
+    # Freeze rows 1–4 only
     ws.freeze_panes = "A5"
+
+    # AutoFilter
     ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(max_col)}{data_end}"
 
+    # Title & timestamp style
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
 
@@ -178,16 +194,21 @@ if uploaded_file:
     scell.alignment = Alignment(horizontal="center", vertical="center")
     scell.fill = ts_fill
 
+    # Header style
     header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     for cell in ws[filter_row]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.fill = header_fill
 
-    thin_border = Border(left=Side(style="thin"), right=Side(style="thin"),
-                         top=Side(style="thin"), bottom=Side(style="thin"))
+    # Borders / fonts
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin")
+    )
     red_font = Font(color="FF0000", bold=True)
 
+    # Column locations
     headers = [ws.cell(row=filter_row, column=c).value for c in range(1, max_col + 1)]
 
     def find_idx_exact(name):
@@ -208,18 +229,18 @@ if uploaded_file:
     tb_idx    = find_idx_exact("TB Test")       or find_idx_sub("tb")
     lead_idx  = find_idx_exact("Lead Test")     or find_idx_sub("lead")
 
-    # Try to detect center/campus and PID columns for summary
+    # Find center/campus column for summary
     center_idx = next((i for i, h in enumerate(headers, 1)
-                       if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower())), None)
-    pid_idx = next((i for i, h in enumerate(headers, 1)
-                    if isinstance(h, str) and ("participant pid" in h.lower() or h.lower().strip()=="pid")), 1)
+                       if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())), None)
 
+    # Clean any stray "Filtered Total" text
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
             if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
 
+    # Apply cell rules
     for r in range(data_start, data_end + 1):
         for c in range(1, max_col + 1):
             cell = ws.cell(row=r, column=c)
@@ -233,6 +254,7 @@ if uploaded_file:
 
             dt = coerce_to_dt(val)
 
+            # Immunizations: keep info; red date if < 8/1/2025
             if immun_idx and c == immun_idx:
                 if dt:
                     cell.value = dt
@@ -241,6 +263,7 @@ if uploaded_file:
                         cell.font = red_font
                 continue
 
+            # TB: keep info; red date if < 8/1/2025
             if tb_idx and c == tb_idx:
                 if dt:
                     cell.value = dt
@@ -249,6 +272,7 @@ if uploaded_file:
                         cell.font = red_font
                 continue
 
+            # Lead: keep info; red date if < 8/1/2025
             if lead_idx and c == lead_idx:
                 if dt:
                     cell.value = dt
@@ -257,6 +281,7 @@ if uploaded_file:
                         cell.font = red_font
                 continue
 
+            # General rule for other date fields
             if dt:
                 if dt < general_cutoff:
                     cell.value = "X"
@@ -265,11 +290,12 @@ if uploaded_file:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
 
+    # Column widths
     width_map = {1: 16, 2: 22}
     for c in range(1, max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
-    # Helper column for dynamic filtering
+    # ---- Helper column for dynamic filtering
     helper_col = max_col + 1
     helper_letter = get_column_letter(helper_col)
     ws.cell(row=filter_row, column=helper_col, value="VisibleFlag").font = Font(bold=True)
@@ -278,7 +304,7 @@ if uploaded_file:
         ws.cell(row=r, column=helper_col).value = f'=SUBTOTAL(103,OFFSET({anchor},ROW()-ROW({anchor}),0))'
     ws.column_dimensions[helper_letter].hidden = True
 
-    # Dynamic (filter-aware) Grand Total
+    # ---- Dynamic Grand Total
     total_row = ws.max_row + 2
     ws.cell(row=total_row, column=1, value="Grand Total").font = Font(bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
@@ -299,33 +325,30 @@ if uploaded_file:
         cell.font = Font(bold=True)
         cell.border = top_border
 
-    # -------- Center Summary sheet (H–P completion) --------
-    # Determine H–P columns by index (8..16). Clamp to existing columns.
+    # ---- Center Summary sheet (H–P completion -> completion rate)
+    # Use H..P columns (8..16). Clamp to existing columns.
     H_idx = 8
-    P_idx = min(16, max_col)
+    P_idx = min(16, ws.max_column)  # after helper added, max_column includes it; clamp works
     req_cols = list(range(H_idx, P_idx + 1))
 
     ws_summary = wb.create_sheet(title="Center Summary")
 
-    ws_summary.append(["Center/Campus", "Total Participants", "Completed (H–P all complete)",
-                       "Completion Rate", "Is 100%?"])
-    for c in range(1, 6):
+    # Only: Center/Campus, Completion Rate of Enrollment, Is 100%?
+    ws_summary.append(["Center/Campus", "Completion Rate of Enrollment", "Is 100%?"])
+    for c in range(1, 3 + 1):
         ws_summary.cell(row=1, column=c).font = Font(bold=True)
         ws_summary.cell(row=1, column=c).alignment = Alignment(horizontal="center", vertical="center")
 
-    # Build per-center stats directly from the formatted sheet values
+    # Aggregate per center
     center_stats = {}
     for r in range(data_start, data_end + 1):
         center_name = ws.cell(row=r, column=center_idx).value if center_idx else "Unknown"
         if center_name is None or str(center_name).strip() == "":
             center_name = "Unknown"
-
-        # count participant
         if center_name not in center_stats:
             center_stats[center_name] = {"total": 0, "completed": 0}
         center_stats[center_name]["total"] += 1
 
-        # row completion across H..P: complete if every cell not blank and not "X"
         row_complete = True
         for c in req_cols:
             v = ws.cell(row=r, column=c).value
@@ -335,49 +358,96 @@ if uploaded_file:
         if row_complete:
             center_stats[center_name]["completed"] += 1
 
-    # Write rows
+    # Sort centers by completion rate (desc) for a cleaner chart
+    sorted_centers = sorted(
+        center_stats.items(),
+        key=lambda kv: (0 if kv[1]["total"] == 0 else kv[1]["completed"]/kv[1]["total"]),
+        reverse=True
+    )
+
     row_i = 2
-    for center_name, stats in sorted(center_stats.items(), key=lambda x: x[0]):
+    for center_name, stats in sorted_centers:
         total = stats["total"]
         completed = stats["completed"]
         rate = 0 if total == 0 else completed / total
+
         ws_summary.cell(row=row_i, column=1, value=center_name)
-        ws_summary.cell(row=row_i, column=2, value=total)
-        ws_summary.cell(row=row_i, column=3, value=completed)
-        rate_cell = ws_summary.cell(row=row_i, column=4, value=rate)
-        rate_cell.number_format = "0%"
-        ws_summary.cell(row=row_i, column=5, value=(completed == total))
+        rc = ws_summary.cell(row=row_i, column=2, value=rate)
+        rc.number_format = "0%"
+        ws_summary.cell(row=row_i, column=3, value=(completed == total))
         row_i += 1
 
     last_row = row_i - 1
 
-    # AutoFilter + widths
-    ws_summary.auto_filter.ref = f"A1:E{last_row}"
-    ws_summary.column_dimensions["A"].width = 34
-    ws_summary.column_dimensions["B"].width = 18
-    ws_summary.column_dimensions["C"].width = 26
-    ws_summary.column_dimensions["D"].width = 16
-    ws_summary.column_dimensions["E"].width = 12
+    # Filter + widths
+    ws_summary.auto_filter.ref = f"A1:C{last_row}"
+    ws_summary.column_dimensions["A"].width = 36
+    ws_summary.column_dimensions["B"].width = 26
+    ws_summary.column_dimensions["C"].width = 14
 
-    # Chart: Completion Rate by Center
+    # ---- Chart: Completion Rate of Enrollment (with visible % labels)
     if last_row >= 2:
+        # Calculate max rate to set some headroom for labels near 100%
+        max_rate = 0.0
+        for r in range(2, last_row + 1):
+            v = ws_summary.cell(row=r, column=2).value or 0
+            try:
+                v = float(v)
+            except Exception:
+                v = 0.0
+            if v > max_rate:
+                max_rate = v
+
+        # Round axis max to next 25% step above max_rate, add pad
+        # e.g., 0.98 -> 1.05 (to avoid clipping 100% labels), 0.76 -> 1.00
+        steps = [0.25 * k for k in range(1, 9)]  # up to 200% just in case
+        y_max = 1.0
+        for s in steps:
+            if max_rate <= s:
+                y_max = max(1.0, s + 0.05)
+                break
+
         chart = BarChart()
-        chart.title = "Completion Rate (H–P)"
+        chart.type = "col"
+        chart.title = "Completion Rate of Enrollment"
+        chart.style = 10
+        chart.y_axis.title = "Enrollment Percentage"
         chart.y_axis.number_format = "0%"
-        chart.y_axis.title = "Rate"
+        chart.y_axis.scaling.min = 0
+        chart.y_axis.scaling.max = y_max
+        chart.y_axis.majorUnit = 0.25
         chart.x_axis.title = "Center/Campus"
-        data = Reference(ws_summary, min_col=4, min_row=1, max_row=last_row)  # includes header
+        chart.gapWidth = 70
+        chart.overlap = 0
+
+        # Data (rates) + categories (campus names)
+        data = Reference(ws_summary, min_col=2, min_row=1, max_row=last_row)  # includes header
         cats = Reference(ws_summary, min_col=1, min_row=2, max_row=last_row)
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(cats)
-        chart.height = 12
-        chart.width = 24
-        ws_summary.add_chart(chart, "G2")
 
-    # Save + download
+        # Turn on value labels and format as percents; place on top
+        if chart.series:
+            s = chart.series[0]
+            s.dLbls = DataLabelList()
+            s.dLbls.showVal = True
+            s.dLbls.showCatName = False
+            s.dLbls.showPercent = False
+            s.dLbls.dLblPos = "t"
+            # Force % format for labels
+            s.dLbls.numFmt = "0%"
+
+        # Larger for readability
+        chart.height = 18
+        chart.width  = 32
+
+        ws_summary.add_chart(chart, "E2")
+
+    # Save & download
     final_output = "Formatted_Enrollment_Checklist.xlsx"
     wb.save(final_output)
 
     with open(final_output, "rb") as f:
         st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
 
