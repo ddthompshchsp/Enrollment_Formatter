@@ -14,6 +14,7 @@ from openpyxl.utils.datetime import from_excel
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
+# Header / UI
 try:
     logo = Image.open("header_logo.png")
     st.image(logo, width=300)
@@ -25,6 +26,7 @@ st.markdown("Upload your **Enrollment.xlsx** file to receive a formatted version
 
 uploaded_file = st.file_uploader("Upload Enrollment.xlsx", type=["xlsx"])
 
+# ---------- Helpers ----------
 def coerce_to_dt(v):
     if pd.isna(v):
         return None
@@ -90,7 +92,9 @@ def collapse_row_values(row, col_names):
         return max(dts)
     return str(vals[0]).strip()
 
+# ---------- Main ----------
 if uploaded_file:
+    # 1) Locate header row by the ST: Participant PID label
     wb_src = load_workbook(uploaded_file, data_only=True)
     ws_src = wb_src.active
 
@@ -102,36 +106,38 @@ if uploaded_file:
                 break
         if header_row:
             break
+
     if not header_row:
         st.error("Couldn't find 'ST: Participant PID' in the file.")
         st.stop()
 
     uploaded_file.seek(0)
+
+    # 2) Load data
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
 
-    general_cutoff = datetime(2025, 5, 11)
-    field_cutoff   = datetime(2025, 8, 1)  # for Immunizations, TB, Lead
+    # Cutoffs
+    general_cutoff = datetime(2025, 5, 11)  # other date fields < this => "X"
+    field_cutoff   = datetime(2025, 8, 1)   # Immunizations/TB/Lead dates < this => red date (keep value)
 
     if "Participant PID" not in df.columns:
         st.error("The file is missing 'Participant PID'.")
         st.stop()
 
+    # One row per PID (take most recent among duplicates)
     df = (
         df.dropna(subset=["Participant PID"])
           .groupby("Participant PID", as_index=False)
           .agg(most_recent)
     )
 
-    # Detect columns robustly (English + Spanish)
+    # 3) Detect and collapse Immunizations, TB, Lead (English + Spanish variants)
     all_cols = list(df.columns)
-    immun_cols = find_cols(all_cols, ["immun"])  # e.g., "H: Immunization - Immunization Certificate Received Date"
-    tb_cols    = find_cols(all_cols, [" tb ", "tb ", " tb", "t b", "t.b", "t b questionnaire", "tuberc", "ppd"])
+    immun_cols = find_cols(all_cols, ["immun"])
+    tb_cols    = find_cols(all_cols, ["tb", "tuberc", "ppd"])
     lead_cols  = find_cols(all_cols, ["lead", "pb"])
 
-    # If your TB/Lead headers include “Questionnaire: Date” and “(Spanish): Date”, the above will catch both.
-
-    # Collapse to single columns
     if immun_cols:
         df["Immunizations"] = df.apply(lambda r: collapse_row_values(r, immun_cols), axis=1)
         df.drop(columns=[c for c in immun_cols if c in df.columns], inplace=True)
@@ -144,11 +150,7 @@ if uploaded_file:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
 
-    # Optional: small debug aid
-    if st.checkbox("Show detected column groups", value=False):
-        st.write({"Immunizations": immun_cols, "TB": tb_cols, "Lead": lead_cols})
-
-    # Write temp workbook
+    # 4) Write a temp workbook with title/timestamp and data starting row 4
     title_text = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
@@ -159,6 +161,7 @@ if uploaded_file:
         pd.DataFrame([[timestamp_text]]).to_excel(writer, index=False, header=False, startrow=1)
         df.to_excel(writer, index=False, startrow=3)
 
+    # 5) Style
     wb = load_workbook(temp_path)
     ws = wb.active
 
@@ -167,7 +170,9 @@ if uploaded_file:
     data_end = ws.max_row
     max_col = ws.max_column
 
-    ws.freeze_panes = "B5"
+    # Freeze only rows above header + header row
+    ws.freeze_panes = "A5"  # rows 1–4 frozen; no frozen column
+
     ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(max_col)}{data_end}"
 
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
@@ -192,35 +197,41 @@ if uploaded_file:
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.fill = header_fill
 
-    thin_border = Border(left=Side(style="thin"), right=Side(style="thin"),
-                         top=Side(style="thin"), bottom=Side(style="thin"))
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin")
+    )
     red_font = Font(color="FF0000", bold=True)
 
-    # Find our new columns by exact name first; fall back to substring match
+    # Identify columns for special rules
     headers = [ws.cell(row=filter_row, column=c).value for c in range(1, max_col + 1)]
+
     def find_idx_exact(name):
         for i, h in enumerate(headers, start=1):
             if h == name:
                 return i
         return None
+
     def find_idx_sub(sub):
         for i, h in enumerate(headers, start=1):
             if isinstance(h, str) and sub in h.lower():
                 return i
         return None
 
-    name_col_idx = next((i for i,h in enumerate(headers,1) if isinstance(h,str) and "name" in h.lower()), 2)
+    name_col_idx = next((i for i, h in enumerate(headers, 1)
+                         if isinstance(h, str) and "name" in h.lower()), 2)
     immun_idx = find_idx_exact("Immunizations") or find_idx_sub("immun")
     tb_idx    = find_idx_exact("TB Test")       or find_idx_sub("tb")
     lead_idx  = find_idx_exact("Lead Test")     or find_idx_sub("lead")
 
-    # Clean any stray "Filtered Total" text
+    # Clear stray "Filtered Total" text
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
             if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
 
+    # Fill + rules
     for r in range(data_start, data_end + 1):
         for c in range(1, max_col + 1):
             cell = ws.cell(row=r, column=c)
@@ -234,6 +245,7 @@ if uploaded_file:
 
             dt = coerce_to_dt(val)
 
+            # Immunizations: keep any info; red date if < 8/1/2025
             if immun_idx and c == immun_idx:
                 if dt:
                     cell.value = dt
@@ -242,6 +254,7 @@ if uploaded_file:
                         cell.font = red_font
                 continue
 
+            # TB: keep any info; red date if < 8/1/2025
             if tb_idx and c == tb_idx:
                 if dt:
                     cell.value = dt
@@ -250,6 +263,7 @@ if uploaded_file:
                         cell.font = red_font
                 continue
 
+            # Lead: keep any info; red date if < 8/1/2025
             if lead_idx and c == lead_idx:
                 if dt:
                     cell.value = dt
@@ -258,6 +272,7 @@ if uploaded_file:
                         cell.font = red_font
                 continue
 
+            # General rule for other date fields
             if dt:
                 if dt < general_cutoff:
                     cell.value = "X"
@@ -266,10 +281,12 @@ if uploaded_file:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
 
+    # Column widths
     width_map = {1: 16, 2: 22}
     for c in range(1, max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
+    # Totals row
     total_row = ws.max_row + 2
     ws.cell(row=total_row, column=1, value="Grand Total").font = Font(bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
@@ -282,11 +299,12 @@ if uploaded_file:
         for r in range(data_start, data_end + 1):
             if ws.cell(row=r, column=c).value != "X":
                 valid += 1
-        cl = ws.cell(row=total_row, column=c, value=valid)
-        cl.alignment = center
-        cl.font = Font(bold=True)
-        cl.border = Border(top=Side(style="thin"))
+        cell = ws.cell(row=total_row, column=c, value=valid)
+        cell.alignment = center
+        cell.font = Font(bold=True)
+        cell.border = Border(top=Side(style="thin"))
 
+    # Save + download
     final_output = "Formatted_Enrollment_Checklist.xlsx"
     wb.save(final_output)
 
