@@ -169,20 +169,20 @@ if uploaded_file:
     filter_row = 4
     data_start = filter_row + 1
     data_end = ws.max_row
-    max_col = ws.max_column
+    base_max_col = ws.max_column  # remember before adding helper column
 
     # Freeze rows 1–4 only
     ws.freeze_panes = "A5"
 
     # AutoFilter
-    ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(max_col)}{data_end}"
+    ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(base_max_col)}{data_end}"
 
     # Title & timestamp style
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
 
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=base_max_col)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=base_max_col)
 
     tcell = ws.cell(row=1, column=1); tcell.value = title_text
     tcell.font = Font(size=14, bold=True)
@@ -209,7 +209,7 @@ if uploaded_file:
     red_font = Font(color="FF0000", bold=True)
 
     # Column locations
-    headers = [ws.cell(row=filter_row, column=c).value for c in range(1, max_col + 1)]
+    headers = [ws.cell(row=filter_row, column=c).value for c in range(1, base_max_col + 1)]
 
     def find_idx_exact(name):
         for i, h in enumerate(headers, start=1):
@@ -235,14 +235,14 @@ if uploaded_file:
 
     # Clean any stray "Filtered Total" text
     for r in range(1, ws.max_row + 1):
-        for c in range(1, ws.max_column + 1):
+        for c in range(1, base_max_col + 1):
             v = ws.cell(row=r, column=c).value
             if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
 
     # Apply cell rules
     for r in range(data_start, data_end + 1):
-        for c in range(1, max_col + 1):
+        for c in range(1, base_max_col + 1):
             cell = ws.cell(row=r, column=c)
             val = cell.value
             cell.border = thin_border
@@ -292,11 +292,11 @@ if uploaded_file:
 
     # Column widths
     width_map = {1: 16, 2: 22}
-    for c in range(1, max_col + 1):
+    for c in range(1, base_max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
-    # ---- Helper column for dynamic filtering
-    helper_col = max_col + 1
+    # ---- Helper column for dynamic filtering (add AFTER styling so base_max_col stays the table width)
+    helper_col = base_max_col + 1
     helper_letter = get_column_letter(helper_col)
     ws.cell(row=filter_row, column=helper_col, value="VisibleFlag").font = Font(bold=True)
     anchor = f"$A${data_start}"
@@ -313,7 +313,7 @@ if uploaded_file:
     top_border = Border(top=Side(style="thin"))
     vis_range = f"${helper_letter}${data_start}:${helper_letter}${data_end}"
 
-    for c in range(1, max_col + 1):
+    for c in range(1, base_max_col + 1):
         if c <= name_col_idx:
             continue
         col_letter = get_column_letter(c)
@@ -326,16 +326,16 @@ if uploaded_file:
         cell.border = top_border
 
     # ---- Center Summary sheet (H–P completion -> completion rate)
-    # Use H..P columns (8..16). Clamp to existing columns.
+    # Use H..P columns (8..16). Clamp to existing real columns (not including helper).
     H_idx = 8
-    P_idx = min(16, ws.max_column)  # after helper added, max_column includes it; clamp works
-    req_cols = list(range(H_idx, P_idx + 1))
+    P_idx = min(16, base_max_col)
+    req_cols = [c for c in range(H_idx, P_idx + 1) if c <= base_max_col]
 
     ws_summary = wb.create_sheet(title="Center Summary")
 
     # Only: Center/Campus, Completion Rate of Enrollment, Is 100%?
     ws_summary.append(["Center/Campus", "Completion Rate of Enrollment", "Is 100%?"])
-    for c in range(1, 3 + 1):
+    for c in range(1, 4):
         ws_summary.cell(row=1, column=c).font = Font(bold=True)
         ws_summary.cell(row=1, column=c).alignment = Alignment(horizontal="center", vertical="center")
 
@@ -345,8 +345,7 @@ if uploaded_file:
         center_name = ws.cell(row=r, column=center_idx).value if center_idx else "Unknown"
         if center_name is None or str(center_name).strip() == "":
             center_name = "Unknown"
-        if center_name not in center_stats:
-            center_stats[center_name] = {"total": 0, "completed": 0}
+        center_stats.setdefault(center_name, {"total": 0, "completed": 0})
         center_stats[center_name]["total"] += 1
 
         row_complete = True
@@ -358,7 +357,7 @@ if uploaded_file:
         if row_complete:
             center_stats[center_name]["completed"] += 1
 
-    # Sort centers by completion rate (desc) for a cleaner chart
+    # Sort centers by completion rate (desc)
     sorted_centers = sorted(
         center_stats.items(),
         key=lambda kv: (0 if kv[1]["total"] == 0 else kv[1]["completed"]/kv[1]["total"]),
@@ -372,8 +371,8 @@ if uploaded_file:
         rate = 0 if total == 0 else completed / total
 
         ws_summary.cell(row=row_i, column=1, value=center_name)
-        rc = ws_summary.cell(row=row_i, column=2, value=rate)
-        rc.number_format = "0%"
+        cell_rate = ws_summary.cell(row=row_i, column=2, value=rate)
+        cell_rate.number_format = "0%"
         ws_summary.cell(row=row_i, column=3, value=(completed == total))
         row_i += 1
 
@@ -385,9 +384,9 @@ if uploaded_file:
     ws_summary.column_dimensions["B"].width = 26
     ws_summary.column_dimensions["C"].width = 14
 
-    # ---- Chart: Completion Rate of Enrollment (with visible % labels)
+    # ---- Chart: Completion Rate of Enrollment (clean, big, % labels, 25% ticks)
     if last_row >= 2:
-        # Calculate max rate to set some headroom for labels near 100%
+        # Find max rate to add headroom (prevents 100% labels from clipping)
         max_rate = 0.0
         for r in range(2, last_row + 1):
             v = ws_summary.cell(row=r, column=2).value or 0
@@ -398,11 +397,9 @@ if uploaded_file:
             if v > max_rate:
                 max_rate = v
 
-        # Round axis max to next 25% step above max_rate, add pad
-        # e.g., 0.98 -> 1.05 (to avoid clipping 100% labels), 0.76 -> 1.00
-        steps = [0.25 * k for k in range(1, 9)]  # up to 200% just in case
+        # Round axis max to next 25% step above max_rate, with a small pad
         y_max = 1.0
-        for s in steps:
+        for s in (0.25, 0.50, 0.75, 1.00, 1.25, 1.50):
             if max_rate <= s:
                 y_max = max(1.0, s + 0.05)
                 break
@@ -420,27 +417,30 @@ if uploaded_file:
         chart.gapWidth = 70
         chart.overlap = 0
 
-        # Data (rates) + categories (campus names)
+        # Data (rates) and categories (campus names)
         data = Reference(ws_summary, min_col=2, min_row=1, max_row=last_row)  # includes header
         cats = Reference(ws_summary, min_col=1, min_row=2, max_row=last_row)
         chart.add_data(data, titles_from_data=True)
         chart.set_categories(cats)
 
-        # Turn on value labels and format as percents; place on top
+        # Single cohesive blue (like your screenshot)
         if chart.series:
             s = chart.series[0]
+            s.graphicalProperties.solidFill = "4F81BD"
+            s.graphicalProperties.line.solidFill = "4F81BD"
+
+            # Value labels ON (no category names on bars)
             s.dLbls = DataLabelList()
             s.dLbls.showVal = True
             s.dLbls.showCatName = False
-            s.dLbls.showPercent = False
-            s.dLbls.dLblPos = "t"
-            # Force % format for labels
-            s.dLbls.numFmt = "0%"
+            s.dLbls.dLblPos = "t"  # top of bar
+            # (avoid extra formatting to keep the drawing XML stable)
 
-        # Larger for readability
+        # Larger but not huge
         chart.height = 18
         chart.width  = 32
 
+        # Place chart
         ws_summary.add_chart(chart, "E2")
 
     # Save & download
