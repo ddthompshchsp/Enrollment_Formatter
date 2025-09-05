@@ -11,12 +11,8 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.datetime import from_excel
-from openpyxl.drawing.image import Image as XLImage  # for embedding the PNG chart
-
-import matplotlib
-matplotlib.use("Agg")  # headless backend for servers/Streamlit
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MultipleLocator, PercentFormatter
+from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.series import DataPoint  # for per-bar colors
 
 st.set_page_config(page_title="Enrollment Formatter", layout="centered")
 
@@ -155,7 +151,7 @@ if uploaded_file:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
 
-    # 4) Write workbook scaffold (basic with pandas + openpyxl styling after)
+    # 4) Write workbook scaffold
     title_text = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
@@ -173,20 +169,20 @@ if uploaded_file:
     filter_row = 4
     data_start = filter_row + 1
     data_end = ws.max_row
-    base_max_col = ws.max_column  # remember before helper column
+    max_col = ws.max_column
 
     # Freeze rows 1–4 only
     ws.freeze_panes = "A5"
 
     # AutoFilter
-    ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(base_max_col)}{data_end}"
+    ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(max_col)}{data_end}"
 
     # Title & timestamp style
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
 
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=base_max_col)
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=base_max_col)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
 
     tcell = ws.cell(row=1, column=1); tcell.value = title_text
     tcell.font = Font(size=14, bold=True)
@@ -213,14 +209,13 @@ if uploaded_file:
     red_font = Font(color="FF0000", bold=True)
 
     # Column locations
-    headers = [ws.cell(row=filter_row, column=c).value for c in range(1, base_max_col + 1)]
+    headers = [ws.cell(row=filter_row, column=c).value for c in range(1, max_col + 1)]
 
     def find_idx_exact(name):
         for i, h in enumerate(headers, start=1):
             if h == name:
                 return i
         return None
-
     def find_idx_sub(sub):
         for i, h in enumerate(headers, start=1):
             if isinstance(h, str) and sub in h.lower():
@@ -237,16 +232,16 @@ if uploaded_file:
     center_idx = next((i for i, h in enumerate(headers, 1)
                        if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())), None)
 
-    # Clean any stray "Filtered Total"
+    # Clean any stray "Filtered Total" text
     for r in range(1, ws.max_row + 1):
-        for c in range(1, base_max_col + 1):
+        for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
             if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
 
     # Apply cell rules
     for r in range(data_start, data_end + 1):
-        for c in range(1, base_max_col + 1):
+        for c in range(1, max_col + 1):
             cell = ws.cell(row=r, column=c)
             val = cell.value
             cell.border = thin_border
@@ -296,11 +291,11 @@ if uploaded_file:
 
     # Column widths
     width_map = {1: 16, 2: 22}
-    for c in range(1, base_max_col + 1):
+    for c in range(1, max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
-    # ---- Helper column for dynamic filtering (add AFTER styling so base_max_col stays table width)
-    helper_col = base_max_col + 1
+    # ---- Helper column for dynamic filtering
+    helper_col = max_col + 1
     helper_letter = get_column_letter(helper_col)
     ws.cell(row=filter_row, column=helper_col, value="VisibleFlag").font = Font(bold=True)
     anchor = f"$A${data_start}"
@@ -317,7 +312,7 @@ if uploaded_file:
     top_border = Border(top=Side(style="thin"))
     vis_range = f"${helper_letter}${data_start}:${helper_letter}${data_end}"
 
-    for c in range(1, base_max_col + 1):
+    for c in range(1, max_col + 1):
         if c <= name_col_idx:
             continue
         col_letter = get_column_letter(c)
@@ -330,10 +325,10 @@ if uploaded_file:
         cell.border = top_border
 
     # ---- Center Summary sheet (H–P completion -> completion rate)
-    # Use H..P columns (8..16). Clamp to existing real columns (not including helper).
+    # Use H..P columns (8..16). Clamp to existing columns.
     H_idx = 8
-    P_idx = min(16, base_max_col)
-    req_cols = [c for c in range(H_idx, P_idx + 1) if c <= base_max_col]
+    P_idx = min(16, ws.max_column)  # after helper added, max_column includes it; OK as we clamp
+    req_cols = list(range(H_idx, P_idx + 1))
 
     ws_summary = wb.create_sheet(title="Center Summary")
 
@@ -349,7 +344,8 @@ if uploaded_file:
         center_name = ws.cell(row=r, column=center_idx).value if center_idx else "Unknown"
         if center_name is None or str(center_name).strip() == "":
             center_name = "Unknown"
-        center_stats.setdefault(center_name, {"total": 0, "completed": 0})
+        if center_name not in center_stats:
+            center_stats[center_name] = {"total": 0, "completed": 0}
         center_stats[center_name]["total"] += 1
 
         row_complete = True
@@ -361,15 +357,13 @@ if uploaded_file:
         if row_complete:
             center_stats[center_name]["completed"] += 1
 
-    # Sort centers by completion rate (desc) for a cleaner visual
+    # Sort centers by completion rate (desc) for a cleaner chart
     sorted_centers = sorted(
         center_stats.items(),
         key=lambda kv: (0 if kv[1]["total"] == 0 else kv[1]["completed"]/kv[1]["total"]),
         reverse=True
     )
 
-    # Write rows and also capture arrays for plotting
-    names, rates = [], []
     row_i = 2
     for center_name, stats in sorted_centers:
         total = stats["total"]
@@ -377,67 +371,62 @@ if uploaded_file:
         rate = 0 if total == 0 else completed / total
 
         ws_summary.cell(row=row_i, column=1, value=center_name)
-        cell_rate = ws_summary.cell(row=row_i, column=2, value=rate)
-        cell_rate.number_format = "0%"
+        rc = ws_summary.cell(row=row_i, column=2, value=rate)
+        rc.number_format = "0%"
         ws_summary.cell(row=row_i, column=3, value=(completed == total))
-
-        names.append(str(center_name))
-        rates.append(rate)
         row_i += 1
 
     last_row = row_i - 1
 
-    # Sheet widths & filter
+    # Filter + widths
     ws_summary.auto_filter.ref = f"A1:C{last_row}"
     ws_summary.column_dimensions["A"].width = 36
     ws_summary.column_dimensions["B"].width = 26
     ws_summary.column_dimensions["C"].width = 14
 
-    # ---- Build chart as an IMAGE (robust against Excel "repair")
-    if len(names) > 0:
-        fig, ax = plt.subplots(figsize=(13, 7))  # larger but not huge
+    # ---- Chart: Completion Rate of Enrollment
+    if last_row >= 2:
+        chart = BarChart()
+        chart.type = "col"
+        chart.title = "Completion Rate of Enrollment"   # <-- requested title
+        chart.y_axis.title = "Rate"
+        chart.y_axis.number_format = "0%"
+        chart.y_axis.scaling.min = 0
+        chart.y_axis.scaling.max = 1
+        chart.y_axis.majorUnit = 0.25   # 25% increments
+        chart.x_axis.title = "Center/Campus"
 
-        # Unique colors (tab20 cycle)
-        cmap = plt.get_cmap("tab20")
-        colors = [cmap(i % 20) for i in range(len(names))]
+        # Data (rate) + categories (campus)
+        data = Reference(ws_summary, min_col=2, min_row=1, max_row=last_row)  # includes header
+        cats = Reference(ws_summary, min_col=1, min_row=2, max_row=last_row)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
 
-        bars = ax.bar(range(len(names)), rates, color=colors)
+        # Unique colors for each bar (per-point)
+        palette = [
+            "4472C4","ED7D31","A5A5A5","FFC000","5B9BD5","70AD47","C00000","7030A0",
+            "00B0F0","FABF8F","92D050","8FAADC","FF66CC","33CCCC","9966FF","FF9933"
+        ]
+        if chart.series:
+            s = chart.series[0]
+            s.graphicalProperties.line.solidFill = "FFFFFF"  # thin white outline
+            s.graphicalProperties.line.width = 0.5
+            s.dPt = []
+            count = last_row - 1  # number of bars
+            for i in range(count):
+                dp = DataPoint(idx=i)
+                dp.graphicalProperties.solidFill = palette[i % len(palette)]
+                s.dPt.append(dp)
 
-        # Title & axes
-        ax.set_title("Completion Rate of Enrollment", fontsize=16, pad=14)
-        ax.set_ylabel("Enrollment Percentage")
-        ax.set_ylim(0, max(1.0, min(1.05, max(rates) + 0.05)) )  # small headroom
-        ax.yaxis.set_major_locator(MultipleLocator(0.25))
-        ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+        # No data labels on bars
+        # (do nothing; default is off)
 
-        # X tick labels (rotated for readability)
-        ax.set_xticks(range(len(names)))
-        ax.set_xticklabels(names, rotation=20, ha="right")
+        # Size: larger but still reasonable
+        chart.height = 16
+        chart.width  = 28
 
-        # Gridlines for cleaner read
-        ax.grid(axis="y", linestyle="-", linewidth=0.5, alpha=0.5)
-
-        # Percentage labels on top of each bar
-        for rect, val in zip(bars, rates):
-            height = rect.get_height()
-            ax.annotate(f"{val:.0%}",
-                        xy=(rect.get_x() + rect.get_width() / 2, height),
-                        xytext=(0, 5),
-                        textcoords="offset points",
-                        ha="center", va="bottom", fontsize=9)
-
-        plt.tight_layout()
-
-        chart_path = "center_completion_chart.png"
-        fig.savefig(chart_path, dpi=180)
-        plt.close(fig)
-
-        # Embed the PNG into the worksheet
-        img = XLImage(chart_path)
-        # size tweak
-        img.width = 1100
-        img.height = 600
-        ws_summary.add_image(img, "E2")
+        # Place chart
+        ws_summary.add_chart(chart, "E2")
 
     # Save & download
     final_output = "Formatted_Enrollment_Checklist.xlsx"
