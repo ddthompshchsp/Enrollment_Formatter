@@ -1,4 +1,3 @@
-
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import re
@@ -250,7 +249,12 @@ if uploaded_file:
         cell.fill = header_fill
     thin_border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
     red_font = Font(color="FF0000", bold=True)
-    headers = [ws.cell(row=filter_row, column=c).value for c in range(1, base_max_col + 1)]
+
+    def hdr(c):
+        v = ws.cell(row=filter_row, column=c).value
+        return v.strip() if isinstance(v, str) else v
+
+    headers = [hdr(c) for c in range(1, base_max_col + 1)]
     def find_idx_exact(name):
         for i, h in enumerate(headers, start=1):
             if h == name:
@@ -261,10 +265,12 @@ if uploaded_file:
             if isinstance(h, str) and sub in h.lower():
                 return i
         return None
+
     name_col_idx = next((i for i, h in enumerate(headers, 1) if isinstance(h, str) and "name" in h.lower()), 2)
     immun_idx = find_idx_exact("Immunizations") or find_idx_sub("immun")
     tb_idx = find_idx_exact("TB Test") or find_idx_sub("tb")
     lead_idx = find_idx_exact("Lead Test") or find_idx_sub("lead")
+
     scn_en_idx = (find_idx_exact("Child's Special Care Needs English") or find_idx_sub("special care needs english"))
     scn_es_idx = (find_idx_exact("Child's Special Care Needs Spanish") or find_idx_sub("special care needs spanish"))
     scn_comb_idx = scn_en_idx or scn_es_idx
@@ -283,13 +289,20 @@ if uploaded_file:
                 dt = dt_en or dt_es
             ws.cell(row=r, column=scn_comb_idx).value = dt if dt else None
         if other_scn_idx:
-            ws.cell(row=filter_row, column=other_scn_idx, value="")
+            ws.delete_cols(other_scn_idx, 1)
+            base_max_col -= 1
+            if scn_comb_idx and other_scn_idx < scn_comb_idx:
+                scn_comb_idx -= 1
+            headers = [hdr(c) for c in range(1, base_max_col + 1)]
+
     center_idx = next((i for i, h in enumerate(headers, 1) if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())), None)
+
     for r in range(1, ws.max_row + 1):
         for c in range(1, base_max_col + 1):
             v = ws.cell(row=r, column=c).value
             if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
+
     for r in range(data_start, data_end + 1):
         for c in range(1, base_max_col + 1):
             cell = ws.cell(row=r, column=c)
@@ -338,9 +351,11 @@ if uploaded_file:
                 else:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
+
     width_map = {1: 16, 2: 22}
     for c in range(1, base_max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
+
     helper_col = base_max_col + 1
     helper_letter = get_column_letter(helper_col)
     ws.cell(row=filter_row, column=helper_col, value="VisibleFlag").font = Font(bold=True)
@@ -348,6 +363,7 @@ if uploaded_file:
     for r in range(data_start, data_end + 1):
         ws.cell(row=r, column=helper_col).value = f'=SUBTOTAL(103,OFFSET({anchor},ROW()-ROW({anchor}),0))'
     ws.column_dimensions[helper_letter].hidden = True
+
     total_row = ws.max_row + 2
     ws.cell(row=total_row, column=1, value="Grand Total").font = Font(bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
@@ -365,62 +381,147 @@ if uploaded_file:
         cell.alignment = center_align
         cell.font = Font(bold=True)
         cell.border = top_border
+
     H_idx = 8
-    R_idx = min(18, base_max_col)
-    req_cols = [c for c in range(H_idx, R_idx + 1) if c <= base_max_col]
-    if other_scn_idx and other_scn_idx in req_cols:
-        req_cols.remove(other_scn_idx)
+    R_idx = min(18, ws.max_column - 1)
+    req_cols = []
+    for c in range(H_idx, R_idx + 1):
+        htext = hdr(c)
+        if htext and str(htext).upper() != "VISIBLEFLAG":
+            req_cols.append(c)
+
     ws_summary = wb.create_sheet(title="Center Summary")
-    ws_summary.append(["Center/Campus", "Completion Rate of Enrollment", "Is 100%?"])
-    for c in range(1, 3 + 1):
+    ws_summary.append(["Center/Campus", "Completed Students", "Total Students", "Completion Rate"])
+    for c in range(1, 5):
         ws_summary.cell(row=1, column=c).font = Font(bold=True)
         ws_summary.cell(row=1, column=c).alignment = Alignment(horizontal="center", vertical="center")
+
+    def value_is_complete(v):
+        if v is None:
+            return False
+        if isinstance(v, str):
+            if v.strip() == "":
+                return False
+            if v.strip().lower() == "x":
+                return False
+        return True
+
     center_stats = {}
     for r in range(data_start, data_end + 1):
-        center_name = ws.cell(row=r, column=center_idx).value if center_idx else "Unknown"
-        if center_name is None or str(center_name).strip() == "":
-            center_name = "Unknown"
-        center_stats.setdefault(center_name, {"total": 0, "completed": 0})
-        center_stats[center_name]["total"] += 1
+        cname = ws.cell(row=r, column=center_idx).value if center_idx else "Unknown"
+        cname = "Unknown" if cname is None or str(cname).strip() == "" else str(cname).strip()
+        center_stats.setdefault(cname, {"total": 0, "completed": 0})
+        center_stats[cname]["total"] += 1
         row_complete = True
         for c in req_cols:
             v = ws.cell(row=r, column=c).value
-            if v in (None, "", "X"):
+            if not value_is_complete(v):
                 row_complete = False
                 break
         if row_complete:
-            center_stats[center_name]["completed"] += 1
+            center_stats[cname]["completed"] += 1
+
     sorted_centers = sorted(
         center_stats.items(),
         key=lambda kv: (0 if kv[1]["total"] == 0 else kv[1]["completed"]/kv[1]["total"]),
         reverse=True
     )
+
     names, rates = [], []
     row_i = 2
-    for center_name, stats in sorted_centers:
+    for cname, stats in sorted_centers:
         total = stats["total"]
         completed = stats["completed"]
         rate = 0 if total == 0 else completed / total
-        ws_summary.cell(row=row_i, column=1, value=center_name)
-        rc = ws_summary.cell(row=row_i, column=2, value=rate)
+        ws_summary.cell(row=row_i, column=1, value=cname)
+        ws_summary.cell(row=row_i, column=2, value=completed)
+        ws_summary.cell(row=row_i, column=3, value=total)
+        rc = ws_summary.cell(row=row_i, column=4, value=rate)
         rc.number_format = "0%"
-        ws_summary.cell(row=row_i, column=3, value=(completed == total))
-        names.append(str(center_name))
+        names.append(str(cname))
         rates.append(rate)
         row_i += 1
+
     last_row = row_i - 1
-    ws_summary.auto_filter.ref = f"A1:C{last_row}"
+    ws_summary.auto_filter.ref = f"A1:D{last_row}"
     ws_summary.column_dimensions["A"].width = 36
-    ws_summary.column_dimensions["B"].width = 26
-    ws_summary.column_dimensions["C"].width = 14
+    ws_summary.column_dimensions["B"].width = 22
+    ws_summary.column_dimensions["C"].width = 18
+    ws_summary.column_dimensions["D"].width = 20
+
     if len(names) > 0:
         chart_path = "center_completion_chart.png"
         draw_completion_chart(names, rates, chart_path)
         img = XLImage(chart_path)
         img.width = 1100
         img.height = 600
-        ws_summary.add_image(img, "E2")
+        ws_summary.add_image(img, "F2")
+
+    ws_scn = wb.create_sheet(title="Child's Special Care Needs Summary")
+    ws_scn.append(["Center/Campus", "Completed SCN", "Total Students", "Remaining", "Completion Rate"])
+    for c in range(1, 6):
+        ws_scn.cell(row=1, column=c).font = Font(bold=True)
+        ws_scn.cell(row=1, column=c).alignment = Alignment(horizontal="center", vertical="center")
+
+    def scn_value_is_complete(v):
+        if v is None:
+            return False
+        if isinstance(v, str):
+            if v.strip() == "" or v.strip().lower() == "x":
+                return False
+        return True
+
+    scn_stats = {}
+    for r in range(data_start, data_end + 1):
+        cname = ws.cell(row=r, column=center_idx).value if center_idx else "Unknown"
+        cname = "Unknown" if cname is None or str(cname).strip() == "" else str(cname).strip()
+        scn_stats.setdefault(cname, {"total": 0, "completed": 0})
+        scn_stats[cname]["total"] += 1
+        scn_val = ws.cell(row=r, column=scn_comb_idx).value if scn_comb_idx else None
+        if scn_value_is_complete(scn_val):
+            scn_stats[cname]["completed"] += 1
+
+    sorted_scn = sorted(
+        scn_stats.items(),
+        key=lambda kv: (0 if kv[1]["total"] == 0 else kv[1]["completed"]/kv[1]["total"]),
+        reverse=True
+    )
+
+    scn_names, scn_rates = [], []
+    row_j = 2
+    for cname, stats in sorted_scn:
+        total = stats["total"]
+        completed = stats["completed"]
+        remaining = total - completed
+        rate = 0 if total == 0 else completed / total
+        ws_scn.cell(row=row_j, column=1, value=cname)
+        ws_scn.cell(row=row_j, column=2, value=completed)
+        ws_scn.cell(row=row_j, column=3, value=total)
+        ws_scn.cell(row=row_j, column=4, value=remaining)
+        rc = ws_scn.cell(row=row_j, column=5, value=rate)
+        rc.number_format = "0%"
+        scn_names.append(str(cname))
+        scn_rates.append(rate)
+        row_j += 1
+
+    last_j = row_j - 1
+    ws_scn.auto_filter.ref = f"A1:E{last_j}"
+    ws_scn.column_dimensions["A"].width = 36
+    ws_scn.column_dimensions["B"].width = 20
+    ws_scn.column_dimensions["C"].width = 18
+    ws_scn.column_dimensions["D"].width = 16
+    ws_scn.column_dimensions["E"].width = 20
+
+    if len(scn_names) > 0:
+        scn_chart_path = "scn_completion_chart.png"
+        draw_completion_chart(scn_names, scn_rates, scn_chart_path)
+        scn_img = XLImage(scn_chart_path)
+        scn_img.width = 1100
+        scn_img.height = 600
+        ws_scn.add_image(scn_img, "G2")
+
     final_output = "Formatted_Enrollment_Checklist.xlsx"
     wb.save(final_output)
     with open(final_output, "rb") as f:
         st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
+
