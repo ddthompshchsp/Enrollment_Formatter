@@ -1,3 +1,4 @@
+
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import re
@@ -266,6 +267,23 @@ if uploaded_file:
     lead_idx = find_idx_exact("Lead Test") or find_idx_sub("lead")
     scn_en_idx = (find_idx_exact("Child's Special Care Needs English") or find_idx_sub("special care needs english"))
     scn_es_idx = (find_idx_exact("Child's Special Care Needs Spanish") or find_idx_sub("special care needs spanish"))
+    scn_comb_idx = scn_en_idx or scn_es_idx
+    other_scn_idx = None
+    if scn_comb_idx:
+        other_scn_idx = scn_es_idx if scn_comb_idx == scn_en_idx else scn_en_idx
+        ws.cell(row=filter_row, column=scn_comb_idx, value="Child's Special Care Needs")
+        for r in range(data_start, data_end + 1):
+            val_en = ws.cell(row=r, column=scn_en_idx).value if scn_en_idx else None
+            val_es = ws.cell(row=r, column=scn_es_idx).value if scn_es_idx else None
+            dt_en = coerce_to_dt(val_en)
+            dt_es = coerce_to_dt(val_es)
+            if dt_en and dt_es:
+                dt = max(dt_en, dt_es)
+            else:
+                dt = dt_en or dt_es
+            ws.cell(row=r, column=scn_comb_idx).value = dt if dt else None
+        if other_scn_idx:
+            ws.cell(row=filter_row, column=other_scn_idx, value="")
     center_idx = next((i for i, h in enumerate(headers, 1) if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())), None)
     for r in range(1, ws.max_row + 1):
         for c in range(1, base_max_col + 1):
@@ -296,19 +314,15 @@ if uploaded_file:
                     if dt < field_cutoff:
                         cell.font = red_font
                 continue
-            if scn_en_idx and c == scn_en_idx:
+            if scn_comb_idx and c == scn_comb_idx:
                 if dt:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
                     if dt < field_cutoff:
                         cell.font = red_font
-                continue
-            if scn_es_idx and c == scn_es_idx:
-                if dt:
-                    cell.value = dt
-                    cell.number_format = "m/d/yy"
-                    if dt < field_cutoff:
-                        cell.font = red_font
+                else:
+                    cell.value = "X"
+                    cell.font = red_font
                 continue
             if lead_idx and c == lead_idx:
                 if dt:
@@ -352,11 +366,13 @@ if uploaded_file:
         cell.font = Font(bold=True)
         cell.border = top_border
     H_idx = 8
-    P_idx = min(16, base_max_col)
-    req_cols = [c for c in range(H_idx, P_idx + 1) if c <= base_max_col]
+    R_idx = min(18, base_max_col)
+    req_cols = [c for c in range(H_idx, R_idx + 1) if c <= base_max_col]
+    if other_scn_idx and other_scn_idx in req_cols:
+        req_cols.remove(other_scn_idx)
     ws_summary = wb.create_sheet(title="Center Summary")
     ws_summary.append(["Center/Campus", "Completion Rate of Enrollment", "Is 100%?"])
-    for c in range(1, 4):
+    for c in range(1, 3 + 1):
         ws_summary.cell(row=1, column=c).font = Font(bold=True)
         ws_summary.cell(row=1, column=c).alignment = Alignment(horizontal="center", vertical="center")
     center_stats = {}
