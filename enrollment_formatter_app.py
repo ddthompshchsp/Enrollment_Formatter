@@ -209,15 +209,12 @@ if uploaded_file:
     immun_cols = find_cols(all_cols, ["immun"])
     tb_cols    = find_cols(all_cols, ["tb", "tuberc", "ppd"])
     lead_cols  = find_cols(all_cols, ["lead", "pb"])
-
     if immun_cols:
         df["Immunizations"] = df.apply(lambda r: collapse_row_values(r, immun_cols), axis=1)
         df.drop(columns=[c for c in immun_cols if c in df.columns], inplace=True)
-
     if tb_cols:
         df["TB Test"] = df.apply(lambda r: collapse_row_values(r, tb_cols), axis=1)
         df.drop(columns=[c for c in tb_cols if c in df.columns], inplace=True)
-
     if lead_cols:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
@@ -253,8 +250,9 @@ if uploaded_file:
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
 
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=base_max_col)
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=base_max_col)
+    max_merge_col = ws.max_column
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_merge_col)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_merge_col)
 
     tcell = ws.cell(row=1, column=1); tcell.value = title_text
     tcell.font = Font(size=14, bold=True)
@@ -470,7 +468,7 @@ if uploaded_file:
         img = XLImage(chart_path)
         img.width = 1100
         img.height = 600
-        ws_summary.add_image(img, "F2")
+        ws_summary.add_image(img, "B20")
 
     ws_scn = wb.create_sheet(title="Child's Special Care Needs Summary")
     ws_scn.append(["Center/Campus", "Completed SCN", "Total Students", "Remaining", "Completion Rate"])
@@ -533,8 +531,9 @@ if uploaded_file:
         scn_img = XLImage(scn_chart_path)
         scn_img.width = 1100
         scn_img.height = 600
-        ws_scn.add_image(scn_img, "G2")
+        ws_scn.add_image(scn_img, "B20")
 
+    wb.properties.excel_base_date = 0
     final_output = "Formatted_Enrollment_Checklist.xlsx"
     wb.save(final_output)
     with open(final_output, "rb") as f:
