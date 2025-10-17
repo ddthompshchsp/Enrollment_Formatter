@@ -191,63 +191,89 @@ if uploaded_file:
     uploaded_file.seek(0)
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
+
     general_cutoff = datetime(2025, 5, 11)
-    field_cutoff = datetime(2025, 8, 1)
+    field_cutoff   = datetime(2025, 8, 1)
+
     if "Participant PID" not in df.columns:
         st.error("The file is missing 'Participant PID'.")
         st.stop()
+
     df = (
         df.dropna(subset=["Participant PID"])
-        .groupby("Participant PID", as_index=False)
-        .agg(most_recent)
+          .groupby("Participant PID", as_index=False)
+          .agg(most_recent)
     )
+
     all_cols = list(df.columns)
     immun_cols = find_cols(all_cols, ["immun"])
-    tb_cols = find_cols(all_cols, ["tb", "tuberc", "ppd"])
-    lead_cols = find_cols(all_cols, ["lead", "pb"])
+    tb_cols    = find_cols(all_cols, ["tb", "tuberc", "ppd"])
+    lead_cols  = find_cols(all_cols, ["lead", "pb"])
+
     if immun_cols:
         df["Immunizations"] = df.apply(lambda r: collapse_row_values(r, immun_cols), axis=1)
         df.drop(columns=[c for c in immun_cols if c in df.columns], inplace=True)
+
     if tb_cols:
         df["TB Test"] = df.apply(lambda r: collapse_row_values(r, tb_cols), axis=1)
         df.drop(columns=[c for c in tb_cols if c in df.columns], inplace=True)
+
     if lead_cols:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
+
+    scn_en_cols = find_cols(all_cols, ["special care needs english"])
+    scn_es_cols = find_cols(all_cols, ["special care needs spanish"])
+    scn_cols = scn_en_cols + scn_es_cols
+    if scn_cols:
+        df["Child's Special Care Needs"] = df.apply(lambda r: collapse_row_values(r, scn_cols), axis=1)
+        df.drop(columns=[c for c in scn_cols if c in df.columns], inplace=True)
+
     title_text = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
+
     temp_path = "Enrollment_Cleaned.xlsx"
     with pd.ExcelWriter(temp_path, engine="openpyxl") as writer:
         pd.DataFrame([[title_text]]).to_excel(writer, index=False, header=False, startrow=0)
         pd.DataFrame([[timestamp_text]]).to_excel(writer, index=False, header=False, startrow=1)
         df.to_excel(writer, index=False, startrow=3)
+
     wb = load_workbook(temp_path)
     ws = wb.active
+
     filter_row = 4
     data_start = filter_row + 1
     data_end = ws.max_row
     base_max_col = ws.max_column
+
     ws.freeze_panes = "A5"
     ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(base_max_col)}{data_end}"
+
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
+
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=base_max_col)
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=base_max_col)
+
     tcell = ws.cell(row=1, column=1); tcell.value = title_text
     tcell.font = Font(size=14, bold=True)
     tcell.alignment = Alignment(horizontal="center", vertical="center")
     tcell.fill = title_fill
+
     scell = ws.cell(row=2, column=1); scell.value = timestamp_text
     scell.font = Font(size=10, italic=True, color="555555")
     scell.alignment = Alignment(horizontal="center", vertical="center")
     scell.fill = ts_fill
+
     header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     for cell in ws[filter_row]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.fill = header_fill
-    thin_border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
+
+    thin_border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                         top=Side(style="thin"), bottom=Side(style="thin"))
     red_font = Font(color="FF0000", bold=True)
 
     def hdr(c):
@@ -255,47 +281,28 @@ if uploaded_file:
         return v.strip() if isinstance(v, str) else v
 
     headers = [hdr(c) for c in range(1, base_max_col + 1)]
+
     def find_idx_exact(name):
         for i, h in enumerate(headers, start=1):
             if h == name:
                 return i
         return None
+
     def find_idx_sub(sub):
         for i, h in enumerate(headers, start=1):
             if isinstance(h, str) and sub in h.lower():
                 return i
         return None
 
-    name_col_idx = next((i for i, h in enumerate(headers, 1) if isinstance(h, str) and "name" in h.lower()), 2)
+    name_col_idx = next((i for i, h in enumerate(headers, 1)
+                         if isinstance(h, str) and "name" in h.lower()), 2)
     immun_idx = find_idx_exact("Immunizations") or find_idx_sub("immun")
-    tb_idx = find_idx_exact("TB Test") or find_idx_sub("tb")
-    lead_idx = find_idx_exact("Lead Test") or find_idx_sub("lead")
+    tb_idx    = find_idx_exact("TB Test")       or find_idx_sub("tb")
+    lead_idx  = find_idx_exact("Lead Test")     or find_idx_sub("lead")
+    scn_idx   = find_idx_exact("Child's Special Care Needs") or find_idx_sub("special care needs")
 
-    scn_en_idx = (find_idx_exact("Child's Special Care Needs English") or find_idx_sub("special care needs english"))
-    scn_es_idx = (find_idx_exact("Child's Special Care Needs Spanish") or find_idx_sub("special care needs spanish"))
-    scn_comb_idx = scn_en_idx or scn_es_idx
-    other_scn_idx = None
-    if scn_comb_idx:
-        other_scn_idx = scn_es_idx if scn_comb_idx == scn_en_idx else scn_en_idx
-        ws.cell(row=filter_row, column=scn_comb_idx, value="Child's Special Care Needs")
-        for r in range(data_start, data_end + 1):
-            val_en = ws.cell(row=r, column=scn_en_idx).value if scn_en_idx else None
-            val_es = ws.cell(row=r, column=scn_es_idx).value if scn_es_idx else None
-            dt_en = coerce_to_dt(val_en)
-            dt_es = coerce_to_dt(val_es)
-            if dt_en and dt_es:
-                dt = max(dt_en, dt_es)
-            else:
-                dt = dt_en or dt_es
-            ws.cell(row=r, column=scn_comb_idx).value = dt if dt else None
-        if other_scn_idx:
-            ws.delete_cols(other_scn_idx, 1)
-            base_max_col -= 1
-            if scn_comb_idx and other_scn_idx < scn_comb_idx:
-                scn_comb_idx -= 1
-            headers = [hdr(c) for c in range(1, base_max_col + 1)]
-
-    center_idx = next((i for i, h in enumerate(headers, 1) if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())), None)
+    center_idx = next((i for i, h in enumerate(headers, 1)
+                       if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())), None)
 
     for r in range(1, ws.max_row + 1):
         for c in range(1, base_max_col + 1):
@@ -308,11 +315,14 @@ if uploaded_file:
             cell = ws.cell(row=r, column=c)
             val = cell.value
             cell.border = thin_border
+
             if val in (None, "", "nan", "NaT"):
                 cell.value = "X"
                 cell.font = red_font
                 continue
+
             dt = coerce_to_dt(val)
+
             if immun_idx and c == immun_idx:
                 if dt:
                     cell.value = dt
@@ -320,6 +330,7 @@ if uploaded_file:
                     if dt < field_cutoff:
                         cell.font = red_font
                 continue
+
             if tb_idx and c == tb_idx:
                 if dt:
                     cell.value = dt
@@ -327,7 +338,8 @@ if uploaded_file:
                     if dt < field_cutoff:
                         cell.font = red_font
                 continue
-            if scn_comb_idx and c == scn_comb_idx:
+
+            if scn_idx and c == scn_idx:
                 if dt:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
@@ -337,6 +349,7 @@ if uploaded_file:
                     cell.value = "X"
                     cell.font = red_font
                 continue
+
             if lead_idx and c == lead_idx:
                 if dt:
                     cell.value = dt
@@ -344,6 +357,7 @@ if uploaded_file:
                     if dt < field_cutoff:
                         cell.font = red_font
                 continue
+
             if dt:
                 if dt < general_cutoff:
                     cell.value = "X"
@@ -370,6 +384,7 @@ if uploaded_file:
     center_align = Alignment(horizontal="center", vertical="center")
     top_border = Border(top=Side(style="thin"))
     vis_range = f"${helper_letter}${data_start}:${helper_letter}${data_end}"
+
     for c in range(1, base_max_col + 1):
         if c <= name_col_idx:
             continue
@@ -383,10 +398,12 @@ if uploaded_file:
         cell.border = top_border
 
     H_idx = 8
-    R_idx = min(18, ws.max_column - 1)
+    Q_idx = min(17, ws.max_column - 1)
     req_cols = []
-    for c in range(H_idx, R_idx + 1):
-        htext = hdr(c)
+    for c in range(H_idx, Q_idx + 1):
+        htext = ws.cell(row=filter_row, column=c).value
+        if isinstance(htext, str):
+            htext = htext.strip()
         if htext and str(htext).upper() != "VISIBLEFLAG":
             req_cols.append(c)
 
@@ -400,9 +417,7 @@ if uploaded_file:
         if v is None:
             return False
         if isinstance(v, str):
-            if v.strip() == "":
-                return False
-            if v.strip().lower() == "x":
+            if v.strip() == "" or v.strip().lower() == "x":
                 return False
         return True
 
@@ -477,7 +492,7 @@ if uploaded_file:
         cname = "Unknown" if cname is None or str(cname).strip() == "" else str(cname).strip()
         scn_stats.setdefault(cname, {"total": 0, "completed": 0})
         scn_stats[cname]["total"] += 1
-        scn_val = ws.cell(row=r, column=scn_comb_idx).value if scn_comb_idx else None
+        scn_val = ws.cell(row=r, column=scn_idx).value if scn_idx else None
         if scn_value_is_complete(scn_val):
             scn_stats[cname]["completed"] += 1
 
@@ -524,4 +539,3 @@ if uploaded_file:
     wb.save(final_output)
     with open(final_output, "rb") as f:
         st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
-
