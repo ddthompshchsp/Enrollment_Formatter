@@ -175,6 +175,7 @@ def draw_completion_chart(names, rates, out_path):
     img.save(out_path, format="PNG")
 
 if uploaded_file:
+    # 1) Load & normalize
     wb_src = load_workbook(uploaded_file, data_only=True)
     ws_src = wb_src.active
     header_row = None
@@ -205,6 +206,7 @@ if uploaded_file:
           .agg(most_recent)
     )
 
+    # 2) Collapse Immunizations, TB, Lead, SCN (SCN mimics TB style)
     all_cols = list(df.columns)
     immun_cols = find_cols(all_cols, ["immun"])
     tb_cols    = find_cols(all_cols, ["tb", "tuberc", "ppd"])
@@ -226,16 +228,17 @@ if uploaded_file:
         df["Child's Special Care Needs"] = df.apply(lambda r: collapse_row_values(r, scn_cols), axis=1)
         df.drop(columns=[c for c in scn_cols if c in df.columns], inplace=True)
 
+    # 3) Write workbook scaffold
     title_text = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
-
     temp_path = "Enrollment_Cleaned.xlsx"
     with pd.ExcelWriter(temp_path, engine="openpyxl") as writer:
         pd.DataFrame([[title_text]]).to_excel(writer, index=False, header=False, startrow=0)
         pd.DataFrame([[timestamp_text]]).to_excel(writer, index=False, header=False, startrow=1)
         df.to_excel(writer, index=False, startrow=3)
 
+    # 4) Style + rules
     wb = load_workbook(temp_path)
     ws = wb.active
 
@@ -302,12 +305,14 @@ if uploaded_file:
     center_idx = next((i for i, h in enumerate(headers, 1)
                        if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())), None)
 
+    # Clean any stray "Filtered Total"
     for r in range(1, ws.max_row + 1):
         for c in range(1, base_max_col + 1):
             v = ws.cell(row=r, column=c).value
             if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
 
+    # Apply cell rules
     for r in range(data_start, data_end + 1):
         for c in range(1, base_max_col + 1):
             cell = ws.cell(row=r, column=c)
@@ -364,10 +369,12 @@ if uploaded_file:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
 
+    # Column widths
     width_map = {1: 16, 2: 22}
     for c in range(1, base_max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
+    # Helper col for visible rows
     helper_col = base_max_col + 1
     helper_letter = get_column_letter(helper_col)
     ws.cell(row=filter_row, column=helper_col, value="VisibleFlag").font = Font(bold=True)
@@ -376,13 +383,13 @@ if uploaded_file:
         ws.cell(row=r, column=helper_col).value = f'=SUBTOTAL(103,OFFSET({anchor},ROW()-ROW({anchor}),0))'
     ws.column_dimensions[helper_letter].hidden = True
 
+    # Grand total row
     total_row = ws.max_row + 2
     ws.cell(row=total_row, column=1, value="Grand Total").font = Font(bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
     center_align = Alignment(horizontal="center", vertical="center")
     top_border = Border(top=Side(style="thin"))
     vis_range = f"${helper_letter}${data_start}:${helper_letter}${data_end}"
-
     for c in range(1, base_max_col + 1):
         if c <= name_col_idx:
             continue
@@ -395,6 +402,7 @@ if uploaded_file:
         cell.font = Font(bold=True)
         cell.border = top_border
 
+    # Required columns are H..Q
     H_idx = 8
     Q_idx = min(17, ws.max_column - 1)
     req_cols = []
@@ -405,6 +413,7 @@ if uploaded_file:
         if htext and str(htext).upper() != "VISIBLEFLAG":
             req_cols.append(c)
 
+    # Center Summary
     ws_summary = wb.create_sheet(title="Center Summary")
     ws_summary.append(["Center/Campus", "Completed Students", "Total Students", "Completion Rate"])
     for c in range(1, 5):
@@ -468,9 +477,10 @@ if uploaded_file:
         img = XLImage(chart_path)
         img.width = 1100
         img.height = 600
-        ws_summary.add_image(img, "B20")
+        ws_summary.add_image(img, "B20")   # safe anchor inside sheet
 
-    ws_scn = wb.create_sheet(title="Child's Special Care Needs Summary")
+    # SCN Summary (short sheet name <= 31 chars)
+    ws_scn = wb.create_sheet(title="SCN Summary")
     ws_scn.append(["Center/Campus", "Completed SCN", "Total Students", "Remaining", "Completion Rate"])
     for c in range(1, 6):
         ws_scn.cell(row=1, column=c).font = Font(bold=True)
@@ -531,9 +541,9 @@ if uploaded_file:
         scn_img = XLImage(scn_chart_path)
         scn_img.width = 1100
         scn_img.height = 600
-        ws_scn.add_image(scn_img, "B20")
+        ws_scn.add_image(scn_img, "B20")  # safe anchor
 
-    wb.properties.excel_base_date = 0
+    # Save
     final_output = "Formatted_Enrollment_Checklist.xlsx"
     wb.save(final_output)
     with open(final_output, "rb") as f:
