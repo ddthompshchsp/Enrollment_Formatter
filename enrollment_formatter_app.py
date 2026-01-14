@@ -188,6 +188,7 @@ if uploaded_file:
     if not header_row:
         st.error("Couldn't find 'ST: Participant PID' in the file.")
         st.stop()
+
     uploaded_file.seek(0)
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
@@ -206,18 +207,40 @@ if uploaded_file:
     )
 
     all_cols = list(df.columns)
+
     immun_cols = find_cols(all_cols, ["immun"])
     tb_cols    = find_cols(all_cols, ["tb", "tuberc", "ppd"])
     lead_cols  = find_cols(all_cols, ["lead", "pb"])
+
     if immun_cols:
         df["Immunizations"] = df.apply(lambda r: collapse_row_values(r, immun_cols), axis=1)
         df.drop(columns=[c for c in immun_cols if c in df.columns], inplace=True)
+
     if tb_cols:
         df["TB Test"] = df.apply(lambda r: collapse_row_values(r, tb_cols), axis=1)
         df.drop(columns=[c for c in tb_cols if c in df.columns], inplace=True)
+
     if lead_cols:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
+
+    # ============================================================
+    # NEW: Merge English/Spanish pairs like TB/Lead (same behavior)
+    # ============================================================
+
+    # 1) EHS Formula Feeding Needs (English + Spanish, incl Spanish "Otro:" long text)
+    formula_cols = find_cols(all_cols, ["ehs formula feeding needs", "formula feeding needs"])
+    if formula_cols:
+        df["EHS Formula Feeding Needs"] = df.apply(lambda r: collapse_row_values(r, formula_cols), axis=1)
+        df.drop(columns=[c for c in formula_cols if c in df.columns], inplace=True)
+
+    # 2) EHS Donna ISD Commitment Letter (English + Spanish date columns)
+    donna_cols = find_cols(all_cols, ["ehs donna isd commitment letter", "donna isd commitment letter"])
+    if donna_cols:
+        df["EHS Donna ISD Commitment Letter"] = df.apply(lambda r: collapse_row_values(r, donna_cols), axis=1)
+        df.drop(columns=[c for c in donna_cols if c in df.columns], inplace=True)
+
+    # ------------------------------------------------------------
 
     scn_en_cols = find_cols(all_cols, ["special care needs english"])
     scn_es_cols = find_cols(all_cols, ["special care needs spanish"])
@@ -299,6 +322,10 @@ if uploaded_file:
     lead_idx  = find_idx_exact("Lead Test")     or find_idx_sub("lead")
     scn_idx   = find_idx_exact("Child's Special Care Needs") or find_idx_sub("special care needs")
 
+    # NEW indices so your date formatting logic applies to these merged fields too
+    formula_idx = find_idx_exact("EHS Formula Feeding Needs") or find_idx_sub("formula feeding needs")
+    donna_idx   = find_idx_exact("EHS Donna ISD Commitment Letter") or find_idx_sub("donna isd commitment letter")
+
     center_idx = next((i for i, h in enumerate(headers, 1)
                        if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())), None)
 
@@ -314,6 +341,7 @@ if uploaded_file:
             val = cell.value
             cell.border = thin_border
 
+            # ✅ this is what creates the red X when empty (including your new merged columns)
             if val in (None, "", "nan", "NaT"):
                 cell.value = "X"
                 cell.font = red_font
@@ -349,6 +377,23 @@ if uploaded_file:
                 continue
 
             if lead_idx and c == lead_idx:
+                if dt:
+                    cell.value = dt
+                    cell.number_format = "m/d/yy"
+                    if dt < field_cutoff:
+                        cell.font = red_font
+                continue
+
+            # Apply same date-formatting rules to the merged EN/ES fields
+            if formula_idx and c == formula_idx:
+                if dt:
+                    cell.value = dt
+                    cell.number_format = "m/d/yy"
+                    if dt < field_cutoff:
+                        cell.font = red_font
+                continue
+
+            if donna_idx and c == donna_idx:
                 if dt:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
