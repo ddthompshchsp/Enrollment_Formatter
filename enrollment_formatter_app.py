@@ -23,6 +23,10 @@ st.title("HCHSP Enrollment Checklist (2025–2026)")
 st.markdown("Upload your **Enrollment.xlsx** file to receive a formatted version.")
 uploaded_file = st.file_uploader("Upload Enrollment.xlsx", type=["xlsx"])
 
+
+# ----------------------------
+# Date coercion / aggregations
+# ----------------------------
 def coerce_to_dt(v):
     if pd.isna(v):
         return None
@@ -46,6 +50,7 @@ def coerce_to_dt(v):
                 continue
     return None
 
+
 def most_recent(series):
     dates, texts = [], []
     for v in pd.unique(series.dropna()):
@@ -60,10 +65,12 @@ def most_recent(series):
         return max(dates)
     return texts[0] if texts else None
 
+
 def normalize(s: str) -> str:
     s = s.lower()
     s = re.sub(r"[\s\-\–\—_:()]+", " ", s)
     return s.strip()
+
 
 def find_cols(cols, keywords):
     out = []
@@ -74,6 +81,7 @@ def find_cols(cols, keywords):
         if any(k in n for k in keywords):
             out.append(c)
     return out
+
 
 def collapse_row_values(row, col_names):
     vals = []
@@ -88,15 +96,21 @@ def collapse_row_values(row, col_names):
         return max(dts)
     return str(vals[0]).strip()
 
+
+# ----------------------------
+# Chart helper
+# ----------------------------
 def hex_to_rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
 
 PALETTE = [hex_to_rgb(h) for h in [
     "4472C4","ED7D31","A5A5A5","FFC000","5B9BD5","70AD47","C00000","7030A0",
     "00B0F0","92D050","8FAADC","FF66CC","33CCCC","9966FF","FF9933","6A5ACD",
     "2E8B57","FF7F50","1F77B4","D62728"
 ]]
+
 
 def draw_completion_chart(names, rates, out_path):
     if not names:
@@ -124,32 +138,40 @@ def draw_completion_chart(names, rates, out_path):
         axis_font = ImageFont.load_default()
         tick_font = ImageFont.load_default()
         label_font = ImageFont.load_default()
+
     title = "Completion Rate of Enrollment"
-    tw, th = draw.textbbox((0,0), title, font=title_font)[2:]
-    draw.text(((img_w - tw)//2, 20), title, fill=(0,0,0), font=title_font)
+    tw, th = draw.textbbox((0, 0), title, font=title_font)[2:]
+    draw.text(((img_w - tw) // 2, 20), title, fill=(0, 0, 0), font=title_font)
+
     x0 = left_margin
     y0 = top_margin
     x1 = left_margin + plot_w
     y1 = top_margin + plot_h
+
     draw.rectangle([x0, y0, x1, y1], outline=(220, 220, 220), width=1)
+
     for p in [0.0, 0.25, 0.50, 0.75, 1.0]:
         y = y1 - int(p * plot_h)
         draw.line([(x0, y), (x1, y)], fill=(230, 230, 230), width=1)
-        label = f"{int(p*100)}%"
-        lw, lh = draw.textbbox((0,0), label, font=tick_font)[2:]
-        draw.text((x0 - 10 - lw, y - lh//2), label, fill=(60,60,60), font=tick_font)
+        label = f"{int(p * 100)}%"
+        lw, lh = draw.textbbox((0, 0), label, font=tick_font)[2:]
+        draw.text((x0 - 10 - lw, y - lh // 2), label, fill=(60, 60, 60), font=tick_font)
+
     y_label = "Enrollment Percentage"
-    yw, yh = draw.textbbox((0,0), y_label, font=axis_font)[2:]
-    y_img = Image.new("RGBA", (yh+10, yw+10), (255,255,255,0))
+    yw, yh = draw.textbbox((0, 0), y_label, font=axis_font)[2:]
+    y_img = Image.new("RGBA", (yh + 10, yw + 10), (255, 255, 255, 0))
     y_draw = ImageDraw.Draw(y_img)
-    y_draw.text((5,5), y_label, fill=(0,0,0), font=axis_font)
+    y_draw.text((5, 5), y_label, fill=(0, 0, 0), font=axis_font)
     y_img = y_img.rotate(90, expand=True)
-    img.paste(y_img, (30, y0 + (plot_h - y_img.size[1])//2), y_img)
+    img.paste(y_img, (30, y0 + (plot_h - y_img.size[1]) // 2), y_img)
+
     x_label = "Center/Campus"
-    xw, xh = draw.textbbox((0,0), x_label, font=axis_font)[2:]
-    draw.text((x0 + (plot_w - xw)//2, y1 + 60), x_label, fill=(0,0,0), font=axis_font)
+    xw, xh = draw.textbbox((0, 0), x_label, font=axis_font)[2:]
+    draw.text((x0 + (plot_w - xw) // 2, y1 + 60), x_label, fill=(0, 0, 0), font=axis_font)
+
     max_rate = max(rates) if rates else 1.0
     y_max = max(1.0, min(1.05, max_rate + 0.05))
+
     for i, (name, rate) in enumerate(zip(names, rates)):
         color = PALETTE[i % len(PALETTE)]
         cx = x0 + int((i + 0.5) * (bar_w + gap))
@@ -158,25 +180,34 @@ def draw_completion_chart(names, rates, out_path):
         x_right = cx + bar_w // 2
         y_top = y1 - bh
         y_bottom = y1
+
         draw.rectangle([x_left, y_top, x_right, y_bottom], fill=color, outline=color)
+
         pct = f"{rate:.0%}"
-        pw, ph = draw.textbbox((0,0), pct, font=label_font)[2:]
+        pw, ph = draw.textbbox((0, 0), pct, font=label_font)[2:]
         label_y = max(y0 - ph + 2, y_top - ph - 4)
-        draw.text((cx - pw//2, label_y), pct, fill=(20,20,20), font=label_font)
+        draw.text((cx - pw // 2, label_y), pct, fill=(20, 20, 20), font=label_font)
+
         name_text = str(name)
-        nw, nh = draw.textbbox((0,0), name_text, font=tick_font)[2:]
-        name_img = Image.new("RGBA", (nw+6, nh+6), (255,255,255,0))
+        nw, nh = draw.textbbox((0, 0), name_text, font=tick_font)[2:]
+        name_img = Image.new("RGBA", (nw + 6, nh + 6), (255, 255, 255, 0))
         name_draw = ImageDraw.Draw(name_img)
-        name_draw.text((3,3), name_text, fill=(40,40,40), font=tick_font)
+        name_draw.text((3, 3), name_text, fill=(40, 40, 40), font=tick_font)
         name_img = name_img.rotate(25, expand=True)
-        nx = cx - name_img.size[0]//2
+        nx = cx - name_img.size[0] // 2
         ny = y1 + 10
         img.paste(name_img, (nx, ny), name_img)
+
     img.save(out_path, format="PNG")
 
+
+# ----------------------------
+# Main
+# ----------------------------
 if uploaded_file:
     wb_src = load_workbook(uploaded_file, data_only=True)
     ws_src = wb_src.active
+
     header_row = None
     for row in ws_src.iter_rows(min_row=1, max_row=30):
         for cell in row:
@@ -185,6 +216,7 @@ if uploaded_file:
                 break
         if header_row:
             break
+
     if not header_row:
         st.error("Couldn't find 'ST: Participant PID' in the file.")
         st.stop()
@@ -194,7 +226,7 @@ if uploaded_file:
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
 
     general_cutoff = datetime(2025, 5, 11)
-    field_cutoff   = datetime(2025, 8, 1)
+    field_cutoff = datetime(2025, 8, 1)
 
     if "Participant PID" not in df.columns:
         st.error("The file is missing 'Participant PID'.")
@@ -208,9 +240,12 @@ if uploaded_file:
 
     all_cols = list(df.columns)
 
+    # ----------------------------
+    # Merge “like TB/Lead” columns
+    # ----------------------------
     immun_cols = find_cols(all_cols, ["immun"])
-    tb_cols    = find_cols(all_cols, ["tb", "tuberc", "ppd"])
-    lead_cols  = find_cols(all_cols, ["lead", "pb"])
+    tb_cols = find_cols(all_cols, ["tb", "tuberc", "ppd"])
+    lead_cols = find_cols(all_cols, ["lead", "pb"])
 
     if immun_cols:
         df["Immunizations"] = df.apply(lambda r: collapse_row_values(r, immun_cols), axis=1)
@@ -224,24 +259,19 @@ if uploaded_file:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
 
-    # ============================================================
-    # NEW: Merge English/Spanish pairs like TB/Lead (same behavior)
-    # ============================================================
-
-    # 1) EHS Formula Feeding Needs (English + Spanish, incl Spanish "Otro:" long text)
+    # NEW: EHS Formula Feeding Needs (English + Spanish)
     formula_cols = find_cols(all_cols, ["ehs formula feeding needs", "formula feeding needs"])
     if formula_cols:
         df["EHS Formula Feeding Needs"] = df.apply(lambda r: collapse_row_values(r, formula_cols), axis=1)
         df.drop(columns=[c for c in formula_cols if c in df.columns], inplace=True)
 
-    # 2) EHS Donna ISD Commitment Letter (English + Spanish date columns)
+    # NEW: EHS Donna ISD Commitment Letter (English + Spanish)
     donna_cols = find_cols(all_cols, ["ehs donna isd commitment letter", "donna isd commitment letter"])
     if donna_cols:
         df["EHS Donna ISD Commitment Letter"] = df.apply(lambda r: collapse_row_values(r, donna_cols), axis=1)
         df.drop(columns=[c for c in donna_cols if c in df.columns], inplace=True)
 
-    # ------------------------------------------------------------
-
+    # SCN (English + Spanish)
     scn_en_cols = find_cols(all_cols, ["special care needs english"])
     scn_es_cols = find_cols(all_cols, ["special care needs spanish"])
     scn_cols = scn_en_cols + scn_es_cols
@@ -249,6 +279,9 @@ if uploaded_file:
         df["Child's Special Care Needs"] = df.apply(lambda r: collapse_row_values(r, scn_cols), axis=1)
         df.drop(columns=[c for c in scn_cols if c in df.columns], inplace=True)
 
+    # ----------------------------
+    # Write intermediate Excel
+    # ----------------------------
     title_text = "Enrollment Checklist 2025–2026"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
@@ -270,6 +303,7 @@ if uploaded_file:
     ws.freeze_panes = "A5"
     ws.auto_filter.ref = f"A{filter_row}:{get_column_letter(base_max_col)}{data_end}"
 
+    # Title / timestamp formatting
     title_fill = PatternFill(start_color="EFEFEF", end_color="EFEFEF", fill_type="solid")
     ts_fill = PatternFill(start_color="F7F7F7", end_color="F7F7F7", fill_type="solid")
 
@@ -287,6 +321,7 @@ if uploaded_file:
     scell.alignment = Alignment(horizontal="center", vertical="center")
     scell.fill = ts_fill
 
+    # Header row formatting
     header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
     for cell in ws[filter_row]:
         cell.font = Font(bold=True, color="FFFFFF")
@@ -297,6 +332,7 @@ if uploaded_file:
                          top=Side(style="thin"), bottom=Side(style="thin"))
     red_font = Font(color="FF0000", bold=True)
 
+    # Helpers for header lookup
     def hdr(c):
         v = ws.cell(row=filter_row, column=c).value
         return v.strip() if isinstance(v, str) else v
@@ -317,31 +353,32 @@ if uploaded_file:
 
     name_col_idx = next((i for i, h in enumerate(headers, 1)
                          if isinstance(h, str) and "name" in h.lower()), 2)
-    immun_idx = find_idx_exact("Immunizations") or find_idx_sub("immun")
-    tb_idx    = find_idx_exact("TB Test")       or find_idx_sub("tb")
-    lead_idx  = find_idx_exact("Lead Test")     or find_idx_sub("lead")
-    scn_idx   = find_idx_exact("Child's Special Care Needs") or find_idx_sub("special care needs")
 
-    # NEW indices so your date formatting logic applies to these merged fields too
+    immun_idx = find_idx_exact("Immunizations") or find_idx_sub("immun")
+    tb_idx = find_idx_exact("TB Test") or find_idx_sub("tb")
+    lead_idx = find_idx_exact("Lead Test") or find_idx_sub("lead")
+    scn_idx = find_idx_exact("Child's Special Care Needs") or find_idx_sub("special care needs")
     formula_idx = find_idx_exact("EHS Formula Feeding Needs") or find_idx_sub("formula feeding needs")
-    donna_idx   = find_idx_exact("EHS Donna ISD Commitment Letter") or find_idx_sub("donna isd commitment letter")
+    donna_idx = find_idx_exact("EHS Donna ISD Commitment Letter") or find_idx_sub("donna isd commitment letter")
 
     center_idx = next((i for i, h in enumerate(headers, 1)
-                       if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())), None)
+                       if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())),
+                      None)
 
+    # Remove any stray “Filtered Total” text
     for r in range(1, ws.max_row + 1):
         for c in range(1, base_max_col + 1):
             v = ws.cell(row=r, column=c).value
             if isinstance(v, str) and "filtered total" in v.lower():
                 ws.cell(row=r, column=c).value = None
 
+    # Format cell values and add red X for empties
     for r in range(data_start, data_end + 1):
         for c in range(1, base_max_col + 1):
             cell = ws.cell(row=r, column=c)
             val = cell.value
             cell.border = thin_border
 
-            # ✅ this is what creates the red X when empty (including your new merged columns)
             if val in (None, "", "nan", "NaT"):
                 cell.value = "X"
                 cell.font = red_font
@@ -365,6 +402,14 @@ if uploaded_file:
                         cell.font = red_font
                 continue
 
+            if lead_idx and c == lead_idx:
+                if dt:
+                    cell.value = dt
+                    cell.number_format = "m/d/yy"
+                    if dt < field_cutoff:
+                        cell.font = red_font
+                continue
+
             if scn_idx and c == scn_idx:
                 if dt:
                     cell.value = dt
@@ -376,15 +421,7 @@ if uploaded_file:
                     cell.font = red_font
                 continue
 
-            if lead_idx and c == lead_idx:
-                if dt:
-                    cell.value = dt
-                    cell.number_format = "m/d/yy"
-                    if dt < field_cutoff:
-                        cell.font = red_font
-                continue
-
-            # Apply same date-formatting rules to the merged EN/ES fields
+            # Apply date formatting rules to the new merged fields too (if they are dates)
             if formula_idx and c == formula_idx:
                 if dt:
                     cell.value = dt
@@ -409,10 +446,12 @@ if uploaded_file:
                     cell.value = dt
                     cell.number_format = "m/d/yy"
 
+    # Column widths
     width_map = {1: 16, 2: 22}
     for c in range(1, base_max_col + 1):
         ws.column_dimensions[get_column_letter(c)].width = width_map.get(c, 14)
 
+    # VisibleFlag helper col for filtered totals
     helper_col = base_max_col + 1
     helper_letter = get_column_letter(helper_col)
     ws.cell(row=filter_row, column=helper_col, value="VisibleFlag").font = Font(bold=True)
@@ -421,6 +460,7 @@ if uploaded_file:
         ws.cell(row=r, column=helper_col).value = f'=SUBTOTAL(103,OFFSET({anchor},ROW()-ROW({anchor}),0))'
     ws.column_dimensions[helper_letter].hidden = True
 
+    # Grand Total row (counts non-X / non-blank visible)
     total_row = ws.max_row + 2
     ws.cell(row=total_row, column=1, value="Grand Total").font = Font(bold=True)
     ws.cell(row=total_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
@@ -440,16 +480,42 @@ if uploaded_file:
         cell.font = Font(bold=True)
         cell.border = top_border
 
+    # ============================================================
+    # Center Summary: build required columns list
+    # EXCLUDE these two by *exact column name*
+    #   - EHS Starting Infants on Solids Form Date
+    #   - EHS Donna ISD Commitment Letter
+    # ============================================================
+    def normalize_header(s: str) -> str:
+        return re.sub(r"[\s\-\–\—_:()]+", " ", s.lower()).strip()
+
+    EXCLUDE_FROM_COMPLETION = {
+        normalize_header("EHS Starting Infants on Solids Form Date"),
+        normalize_header("EHS Donna ISD Commitment Letter"),
+    }
+
+    # Keep your original required-range behavior (H..Q), but skip excluded names
     H_idx = 8
     Q_idx = min(17, ws.max_column - 1)
+
     req_cols = []
     for c in range(H_idx, Q_idx + 1):
         htext = ws.cell(row=filter_row, column=c).value
-        if isinstance(htext, str):
-            htext = htext.strip()
-        if htext and str(htext).upper() != "VISIBLEFLAG":
-            req_cols.append(c)
+        if not isinstance(htext, str):
+            continue
+        h_norm = normalize_header(htext.strip())
 
+        if h_norm == "visibleflag":
+            continue
+
+        if h_norm in EXCLUDE_FROM_COMPLETION:
+            continue
+
+        req_cols.append(c)
+
+    # ----------------------------
+    # Center Summary sheet
+    # ----------------------------
     ws_summary = wb.create_sheet(title="Center Summary")
     ws_summary.append(["Center/Campus", "Completed Students", "Total Students", "Completion Rate"])
     for c in range(1, 5):
@@ -468,20 +534,23 @@ if uploaded_file:
     for r in range(data_start, data_end + 1):
         cname = ws.cell(row=r, column=center_idx).value if center_idx else "Unknown"
         cname = "Unknown" if cname is None or str(cname).strip() == "" else str(cname).strip()
+
         center_stats.setdefault(cname, {"total": 0, "completed": 0})
         center_stats[cname]["total"] += 1
+
         row_complete = True
         for c in req_cols:
             v = ws.cell(row=r, column=c).value
             if not value_is_complete(v):
                 row_complete = False
                 break
+
         if row_complete:
             center_stats[cname]["completed"] += 1
 
     sorted_centers = sorted(
         center_stats.items(),
-        key=lambda kv: (0 if kv[1]["total"] == 0 else kv[1]["completed"]/kv[1]["total"]),
+        key=lambda kv: (0 if kv[1]["total"] == 0 else kv[1]["completed"] / kv[1]["total"]),
         reverse=True
     )
 
@@ -491,11 +560,13 @@ if uploaded_file:
         total = stats["total"]
         completed = stats["completed"]
         rate = 0 if total == 0 else completed / total
+
         ws_summary.cell(row=row_i, column=1, value=cname)
         ws_summary.cell(row=row_i, column=2, value=completed)
         ws_summary.cell(row=row_i, column=3, value=total)
         rc = ws_summary.cell(row=row_i, column=4, value=rate)
         rc.number_format = "0%"
+
         names.append(str(cname))
         rates.append(rate)
         row_i += 1
@@ -515,6 +586,9 @@ if uploaded_file:
         img.height = 600
         ws_summary.add_image(img, "B20")
 
+    # ----------------------------
+    # SCN Summary sheet
+    # ----------------------------
     ws_scn = wb.create_sheet(title="Child's Special Care Needs Summary")
     ws_scn.append(["Center/Campus", "Completed SCN", "Total Students", "Remaining", "Completion Rate"])
     for c in range(1, 6):
@@ -533,15 +607,17 @@ if uploaded_file:
     for r in range(data_start, data_end + 1):
         cname = ws.cell(row=r, column=center_idx).value if center_idx else "Unknown"
         cname = "Unknown" if cname is None or str(cname).strip() == "" else str(cname).strip()
+
         scn_stats.setdefault(cname, {"total": 0, "completed": 0})
         scn_stats[cname]["total"] += 1
+
         scn_val = ws.cell(row=r, column=scn_idx).value if scn_idx else None
         if scn_value_is_complete(scn_val):
             scn_stats[cname]["completed"] += 1
 
     sorted_scn = sorted(
         scn_stats.items(),
-        key=lambda kv: (0 if kv[1]["total"] == 0 else kv[1]["completed"]/kv[1]["total"]),
+        key=lambda kv: (0 if kv[1]["total"] == 0 else kv[1]["completed"] / kv[1]["total"]),
         reverse=True
     )
 
@@ -552,12 +628,14 @@ if uploaded_file:
         completed = stats["completed"]
         remaining = total - completed
         rate = 0 if total == 0 else completed / total
+
         ws_scn.cell(row=row_j, column=1, value=cname)
         ws_scn.cell(row=row_j, column=2, value=completed)
         ws_scn.cell(row=row_j, column=3, value=total)
         ws_scn.cell(row=row_j, column=4, value=remaining)
         rc = ws_scn.cell(row=row_j, column=5, value=rate)
         rc.number_format = "0%"
+
         scn_names.append(str(cname))
         scn_rates.append(rate)
         row_j += 1
@@ -578,8 +656,10 @@ if uploaded_file:
         scn_img.height = 600
         ws_scn.add_image(scn_img, "B20")
 
+    # Save + download
     wb.properties.excel_base_date = 0
     final_output = "Formatted_Enrollment_Checklist.xlsx"
     wb.save(final_output)
+
     with open(final_output, "rb") as f:
         st.download_button("📥 Download Formatted Excel", f, file_name=final_output)
