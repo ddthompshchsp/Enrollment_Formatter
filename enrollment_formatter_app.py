@@ -98,7 +98,7 @@ def collapse_row_values(row, col_names):
 
 
 # ----------------------------
-# NEW: bilingual Yes/No merge helpers
+# NEW: bilingual Yes/No merge helpers (for Starting Infants on Solid Foods)
 # ----------------------------
 def is_blank(v) -> bool:
     if pd.isna(v):
@@ -109,8 +109,7 @@ def is_blank(v) -> bool:
 
 def find_non_date_cols(cols, base_keywords):
     """
-    Find columns matching the base keywords BUT exclude date fields
-    (headers containing 'date' or 'fecha').
+    Find columns matching keywords but exclude Date/Fecha columns.
     """
     candidates = find_cols(cols, base_keywords)
     out = []
@@ -124,8 +123,10 @@ def find_non_date_cols(cols, base_keywords):
 
 def collapse_yes_no(row, col_names):
     """
-    Merge bilingual Yes/No columns.
-    Preference: Yes/Sí > No > first nonblank text.
+    Merge bilingual Yes/No answers.
+    Returns "Yes" if any column has Yes/Si/Sí.
+    Returns "No" if any column has No.
+    Returns None if both blank (later becomes red X).
     """
     found = []
     for c in col_names:
@@ -139,10 +140,10 @@ def collapse_yes_no(row, col_names):
     no_tokens = {"no", "n"}
 
     for v in found:
-        if v.strip().lower() in yes_tokens:
+        if v.lower() in yes_tokens:
             return "Yes"
     for v in found:
-        if v.strip().lower() in no_tokens:
+        if v.lower() in no_tokens:
             return "No"
 
     return found[0]
@@ -310,19 +311,11 @@ if uploaded_file:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
 
-    # ----------------------------
-    # IMPORTANT: Merge bilingual ANSWER columns into ONE column
-    # If both blank -> None (later becomes red X)
-    # ----------------------------
-    formula_ans_cols = find_non_date_cols(all_cols, ["ehs formula feeding needs", "formula feeding needs"])
-    if formula_ans_cols:
-        df["EHS Formula Feeding Needs"] = df.apply(lambda r: collapse_yes_no(r, formula_ans_cols), axis=1)
-        df.drop(columns=[c for c in formula_ans_cols if c in df.columns], inplace=True)
-
-    donna_ans_cols = find_non_date_cols(all_cols, ["ehs donna isd commitment letter", "donna isd commitment letter"])
-    if donna_ans_cols:
-        df["EHS Donna ISD Commitment Letter"] = df.apply(lambda r: collapse_yes_no(r, donna_ans_cols), axis=1)
-        df.drop(columns=[c for c in donna_ans_cols if c in df.columns], inplace=True)
+    # ✅ NEW: Merge Starting Infants on Solid Foods (English + Spanish answer columns)
+    solid_foods_cols = find_non_date_cols(all_cols, ["starting infants", "solid foods", "solids"])
+    if solid_foods_cols:
+        df["EHS Starting Infants on Solid Foods"] = df.apply(lambda r: collapse_yes_no(r, solid_foods_cols), axis=1)
+        df.drop(columns=[c for c in solid_foods_cols if c in df.columns], inplace=True)
 
     # SCN (English + Spanish)
     scn_en_cols = find_cols(all_cols, ["special care needs english"])
@@ -430,7 +423,6 @@ if uploaded_file:
             val = cell.value
             cell.border = thin_border
 
-            # Always mark blank as red X
             if val in (None, "", "nan", "NaT"):
                 cell.value = "X"
                 cell.font = red_font
@@ -473,7 +465,6 @@ if uploaded_file:
                     cell.font = red_font
                 continue
 
-            # General “old date” rule (kept as you had it)
             if dt:
                 if dt < general_cutoff:
                     cell.value = "X"
