@@ -98,6 +98,57 @@ def collapse_row_values(row, col_names):
 
 
 # ----------------------------
+# NEW: bilingual Yes/No merge helpers
+# ----------------------------
+def is_blank(v) -> bool:
+    if pd.isna(v):
+        return True
+    s = str(v).strip()
+    return s == "" or s.lower() in {"nan", "nat"}
+
+
+def find_non_date_cols(cols, base_keywords):
+    """
+    Find columns matching the base keywords BUT exclude date fields
+    (headers containing 'date' or 'fecha').
+    """
+    candidates = find_cols(cols, base_keywords)
+    out = []
+    for c in candidates:
+        n = normalize(c)
+        if "date" in n or "fecha" in n:
+            continue
+        out.append(c)
+    return out
+
+
+def collapse_yes_no(row, col_names):
+    """
+    Merge bilingual Yes/No columns.
+    Preference: Yes/Sí > No > first nonblank text.
+    """
+    found = []
+    for c in col_names:
+        if c in row and not is_blank(row[c]):
+            found.append(str(row[c]).strip())
+
+    if not found:
+        return None
+
+    yes_tokens = {"yes", "si", "sí", "sì", "y", "s"}
+    no_tokens = {"no", "n"}
+
+    for v in found:
+        if v.strip().lower() in yes_tokens:
+            return "Yes"
+    for v in found:
+        if v.strip().lower() in no_tokens:
+            return "No"
+
+    return found[0]
+
+
+# ----------------------------
 # Chart helper
 # ----------------------------
 def hex_to_rgb(h):
@@ -259,17 +310,19 @@ if uploaded_file:
         df["Lead Test"] = df.apply(lambda r: collapse_row_values(r, lead_cols), axis=1)
         df.drop(columns=[c for c in lead_cols if c in df.columns], inplace=True)
 
-    # NEW: EHS Formula Feeding Needs (English + Spanish)
-    formula_cols = find_cols(all_cols, ["ehs formula feeding needs", "formula feeding needs"])
-    if formula_cols:
-        df["EHS Formula Feeding Needs"] = df.apply(lambda r: collapse_row_values(r, formula_cols), axis=1)
-        df.drop(columns=[c for c in formula_cols if c in df.columns], inplace=True)
+    # ----------------------------
+    # IMPORTANT: Merge bilingual ANSWER columns into ONE column
+    # If both blank -> None (later becomes red X)
+    # ----------------------------
+    formula_ans_cols = find_non_date_cols(all_cols, ["ehs formula feeding needs", "formula feeding needs"])
+    if formula_ans_cols:
+        df["EHS Formula Feeding Needs"] = df.apply(lambda r: collapse_yes_no(r, formula_ans_cols), axis=1)
+        df.drop(columns=[c for c in formula_ans_cols if c in df.columns], inplace=True)
 
-    # NEW: EHS Donna ISD Commitment Letter (English + Spanish)
-    donna_cols = find_cols(all_cols, ["ehs donna isd commitment letter", "donna isd commitment letter"])
-    if donna_cols:
-        df["EHS Donna ISD Commitment Letter"] = df.apply(lambda r: collapse_row_values(r, donna_cols), axis=1)
-        df.drop(columns=[c for c in donna_cols if c in df.columns], inplace=True)
+    donna_ans_cols = find_non_date_cols(all_cols, ["ehs donna isd commitment letter", "donna isd commitment letter"])
+    if donna_ans_cols:
+        df["EHS Donna ISD Commitment Letter"] = df.apply(lambda r: collapse_yes_no(r, donna_ans_cols), axis=1)
+        df.drop(columns=[c for c in donna_ans_cols if c in df.columns], inplace=True)
 
     # SCN (English + Spanish)
     scn_en_cols = find_cols(all_cols, ["special care needs english"])
@@ -358,8 +411,6 @@ if uploaded_file:
     tb_idx = find_idx_exact("TB Test") or find_idx_sub("tb")
     lead_idx = find_idx_exact("Lead Test") or find_idx_sub("lead")
     scn_idx = find_idx_exact("Child's Special Care Needs") or find_idx_sub("special care needs")
-    formula_idx = find_idx_exact("EHS Formula Feeding Needs") or find_idx_sub("formula feeding needs")
-    donna_idx = find_idx_exact("EHS Donna ISD Commitment Letter") or find_idx_sub("donna isd commitment letter")
 
     center_idx = next((i for i, h in enumerate(headers, 1)
                        if isinstance(h, str) and ("center" in h.lower() or "campus" in h.lower() or "school" in h.lower())),
@@ -379,6 +430,7 @@ if uploaded_file:
             val = cell.value
             cell.border = thin_border
 
+            # Always mark blank as red X
             if val in (None, "", "nan", "NaT"):
                 cell.value = "X"
                 cell.font = red_font
@@ -421,23 +473,7 @@ if uploaded_file:
                     cell.font = red_font
                 continue
 
-            # Apply date formatting rules to the new merged fields too (if they are dates)
-            if formula_idx and c == formula_idx:
-                if dt:
-                    cell.value = dt
-                    cell.number_format = "m/d/yy"
-                    if dt < field_cutoff:
-                        cell.font = red_font
-                continue
-
-            if donna_idx and c == donna_idx:
-                if dt:
-                    cell.value = dt
-                    cell.number_format = "m/d/yy"
-                    if dt < field_cutoff:
-                        cell.font = red_font
-                continue
-
+            # General “old date” rule (kept as you had it)
             if dt:
                 if dt < general_cutoff:
                     cell.value = "X"
