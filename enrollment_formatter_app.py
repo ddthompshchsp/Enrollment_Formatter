@@ -286,7 +286,7 @@ if uploaded_file:
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
 
-    general_cutoff = datetime(2026, 5, 19)
+    general_cutoff = datetime(2026, 5, 18)
     field_cutoff = datetime(2026, 8, 1)
     
     if "Participant PID" not in df.columns:
