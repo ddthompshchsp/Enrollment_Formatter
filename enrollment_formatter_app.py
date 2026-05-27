@@ -286,9 +286,9 @@ if uploaded_file:
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
 
-    general_cutoff = datetime(2025, 5, 11)
-    field_cutoff = datetime(2025, 8, 1)
-
+    general_cutoff = datetime(2026, 5, 19)
+    field_cutoff = datetime(2026, 8, 1)
+    
     if "Participant PID" not in df.columns:
         st.error("The file is missing 'Participant PID'.")
         st.stop()
@@ -349,7 +349,7 @@ if uploaded_file:
     # ----------------------------
     # Write intermediate Excel
     # ----------------------------
-    title_text = "Enrollment Checklist 2025–2026"
+    title_text = "Enrollment Checklist 2026–2027"
     central_now = datetime.now(ZoneInfo("America/Chicago"))
     timestamp_text = central_now.strftime("Generated on %B %d, %Y at %I:%M %p %Z")
 
