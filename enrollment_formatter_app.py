@@ -278,6 +278,7 @@ if uploaded_file:
 
     general_cutoff = datetime(2026, 5, 19)
     field_cutoff = datetime(2026, 8, 1)
+    tb_lead_cutoff = datetime(2026, 5, 15)
     immunization_cutoff = datetime(2025, 8, 1)
 
     if "Participant PID" not in df.columns:
@@ -296,8 +297,12 @@ if uploaded_file:
     # Merge “like TB/Lead” columns
     # ----------------------------
     immun_cols = find_cols(all_cols, ["immun"])
-    tb_cols = find_cols(all_cols, ["tb", "tuberc", "ppd"])
-    lead_cols = find_cols(all_cols, ["lead", "pb"])
+    tb_cols = find_cols(all_cols, [
+        "tb", "tuberc", "tuberculosis", "ppd", "tb risk", "tb questionnaire"
+    ])
+    lead_cols = find_cols(all_cols, [
+        "lead", "lead risk", "lead questionnaire", "pb"
+    ])
 
     if immun_cols:
         df["Immunizations"] = df.apply(lambda r: collapse_row_values(r, immun_cols), axis=1)
@@ -472,22 +477,28 @@ if uploaded_file:
                         cell.font = black_font
                 continue
 
-            # TB Test: red if before 8/1/2026
+            # TB Test: X if before 5/15/2026
             if tb_idx and c == tb_idx:
                 if dt:
-                    cell.value = dt
-                    cell.number_format = "m/d/yy"
-                    if dt < field_cutoff:
+                    if dt < tb_lead_cutoff:
+                        cell.value = "X"
                         cell.font = red_font
+                    else:
+                        cell.value = dt
+                        cell.number_format = "m/d/yy"
+                        cell.font = black_font
                 continue
 
-            # Lead Test: red if before 8/1/2026
+            # Lead Test: X if before 5/15/2026
             if lead_idx and c == lead_idx:
                 if dt:
-                    cell.value = dt
-                    cell.number_format = "m/d/yy"
-                    if dt < field_cutoff:
+                    if dt < tb_lead_cutoff:
+                        cell.value = "X"
                         cell.font = red_font
+                    else:
+                        cell.value = dt
+                        cell.number_format = "m/d/yy"
+                        cell.font = black_font
                 continue
 
             # Child's Special Care Needs: red if before 8/1/2026, X if not a date
