@@ -587,33 +587,22 @@ if uploaded_file:
     def normalize_header(s: str) -> str:
         return re.sub(r"[\s\-\–\—_:()]+", " ", s.lower()).strip()
 
-    EXCLUDE_FROM_COMPLETION = {
-        normalize_header("EHS Starting Infants on Solids Form Date"),
-        normalize_header("EHS Donna ISD Commitment Letter"),
-    }
-
-    # Completion dashboard rule:
-    # Each row/student only counts as complete if columns H through S
-    # are all filled in and none of those required cells are marked X.
+    # Dashboard completion rule based on Sheet1:
+    # Each student/row from Sheet1 counts as complete ONLY when columns H through S
+    # are filled in, excluding column O.
+    #
+    # Excel column numbers:
+    # H = 8
+    # O = 15, excluded
+    # S = 19
     H_idx = 8
     S_idx = min(19, ws.max_column - 1)
+    EXCLUDED_COMPLETION_COLS = {15}
 
-    req_cols = []
-    for c in range(H_idx, S_idx + 1):
-        htext = ws.cell(row=filter_row, column=c).value
-
-        if not isinstance(htext, str):
-            continue
-
-        h_norm = normalize_header(htext.strip())
-
-        if h_norm == "visibleflag":
-            continue
-
-        if h_norm in EXCLUDE_FROM_COMPLETION:
-            continue
-
-        req_cols.append(c)
+    req_cols = [
+        c for c in range(H_idx, S_idx + 1)
+        if c not in EXCLUDED_COMPLETION_COLS
+    ]
 
     ws_summary = wb.create_sheet(title="Center Summary")
     ws_summary.append(["Center/Campus", "Completed Students", "Total Students", "Completion Rate"])
@@ -623,11 +612,18 @@ if uploaded_file:
         ws_summary.cell(row=1, column=c).alignment = Alignment(horizontal="center", vertical="center")
 
     def value_is_complete(v):
+        # Sheet1 values are checked after formatting.
+        # Blank, X, nan, NaT, or None means incomplete.
         if v is None:
             return False
+
         if isinstance(v, str):
-            if v.strip() == "" or v.strip().lower() == "x":
+            s = v.strip()
+            if s == "":
                 return False
+            if s.lower() in {"x", "nan", "nat", "none"}:
+                return False
+
         return True
 
     center_stats = {}
@@ -639,13 +635,13 @@ if uploaded_file:
         center_stats.setdefault(cname, {"total": 0, "completed": 0})
         center_stats[cname]["total"] += 1
 
-        row_complete = True
-
-        for c in req_cols:
-            v = ws.cell(row=r, column=c).value
-            if not value_is_complete(v):
-                row_complete = False
-                break
+        # Check this exact row on Sheet1.
+        # Complete = every required cell from H through S is filled,
+        # excluding column O, and none are marked X.
+        row_complete = all(
+            value_is_complete(ws.cell(row=r, column=c).value)
+            for c in req_cols
+        )
 
         if row_complete:
             center_stats[cname]["completed"] += 1
@@ -706,6 +702,3 @@ if uploaded_file:
             f,
             file_name=final_output
         )
-
-
-
