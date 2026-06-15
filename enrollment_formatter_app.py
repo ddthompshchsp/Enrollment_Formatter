@@ -1,3 +1,4 @@
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import re
 import math
@@ -275,9 +276,9 @@ if uploaded_file:
     df = pd.read_excel(uploaded_file, header=header_row - 1)
     df.columns = [c.replace("ST: ", "") if isinstance(c, str) else c for c in df.columns]
 
-    general_cutoff = datetime(2026, 5, 19)
-    field_cutoff = datetime(2026, 8, 1)
-    tb_lead_cutoff = datetime(2026, 5, 15)
+    general_cutoff = datetime(2026, 5, 1)
+    field_cutoff = datetime(2026, 5, 1)
+    tb_lead_cutoff = datetime(2026, 5, 1)
     immunization_cutoff = datetime(2025, 8, 1)
 
     if "Participant PID" not in df.columns:
@@ -705,4 +706,6 @@ if uploaded_file:
             f,
             file_name=final_output
         )
+
+
 
