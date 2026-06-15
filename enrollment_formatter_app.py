@@ -1,4 +1,3 @@
-from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import re
 import math
@@ -477,7 +476,7 @@ if uploaded_file:
                         cell.font = black_font
                 continue
 
-            # TB Test: X if before 5/1/2026
+            # TB Test: X if before 5/15/2026
             if tb_idx and c == tb_idx:
                 if dt:
                     if dt < tb_lead_cutoff:
@@ -489,7 +488,7 @@ if uploaded_file:
                         cell.font = black_font
                 continue
 
-            # Lead Test: X if before 5/1/2026
+            # Lead Test: X if before 5/15/2026
             if lead_idx and c == lead_idx:
                 if dt:
                     if dt < tb_lead_cutoff:
@@ -531,7 +530,7 @@ if uploaded_file:
                         cell.font = red_font
                 continue
 
-            # General date fields: X if before 5/1/2026
+            # General date fields: X if before 5/19/2026
             if dt:
                 if dt < general_cutoff:
                     cell.value = "X"
@@ -592,11 +591,14 @@ if uploaded_file:
         normalize_header("EHS Donna ISD Commitment Letter"),
     }
 
+    # Completion dashboard rule:
+    # Each row/student only counts as complete if columns H through S
+    # are all filled in and none of those required cells are marked X.
     H_idx = 8
-    Q_idx = min(17, ws.max_column - 1)
+    S_idx = min(19, ws.max_column - 1)
 
     req_cols = []
-    for c in range(H_idx, Q_idx + 1):
+    for c in range(H_idx, S_idx + 1):
         htext = ws.cell(row=filter_row, column=c).value
 
         if not isinstance(htext, str):
@@ -703,3 +705,4 @@ if uploaded_file:
             f,
             file_name=final_output
         )
+
