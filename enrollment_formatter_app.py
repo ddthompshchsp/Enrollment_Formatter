@@ -477,7 +477,7 @@ if uploaded_file:
                         cell.font = black_font
                 continue
 
-            # TB Test: X if before 5/15/2026
+            # TB Test: X if before 5/1/2026
             if tb_idx and c == tb_idx:
                 if dt:
                     if dt < tb_lead_cutoff:
@@ -489,7 +489,7 @@ if uploaded_file:
                         cell.font = black_font
                 continue
 
-            # Lead Test: X if before 5/15/2026
+            # Lead Test: X if before 5/1/2026
             if lead_idx and c == lead_idx:
                 if dt:
                     if dt < tb_lead_cutoff:
@@ -531,7 +531,7 @@ if uploaded_file:
                         cell.font = red_font
                 continue
 
-            # General date fields: X if before 5/19/2026
+            # General date fields: X if before 5/1/2026
             if dt:
                 if dt < general_cutoff:
                     cell.value = "X"
